@@ -1,0 +1,222 @@
+"""Build an independent, bounded self-check from the specification only.
+
+The controller owns the instance, comparison task, counters and verdict. A model
+self-test is useful evidence, never a substitute for an independent official TB.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+import json
+import re
+import time
+
+from .llm import LLM, strip_think
+from .spec_contract import Contract
+from .tools import strip_comments
+
+
+@dataclass
+class SelfTest:
+    declarations: str
+    stimulus: str
+    coverage: str
+    uncertainties: str = ""
+
+    def render(self, contract: Contract) -> str:
+        width = max([1024] + [w for _, w, _ in contract.ports])
+        ports = []
+        init = []
+        for direction, bits, name in contract.ports:
+            if not 0 < bits <= 8192:
+                raise ValueError("unresolved or unsupported port width for self-test")
+            rng = "" if bits == 1 else f"[{bits - 1}:0] "
+            if direction == "inout":
+                raise ValueError("inout self-test requires an explicit bus driver")
+            ports.append(f"  {'reg' if direction == 'input' else 'wire'} {rng}{name};")
+            if direction == "input":
+                init.append(f"    {name} = '0;")
+        connections = ", ".join(f".{n}({n})" for _, _, n in contract.ports)
+        return f"""`timescale 1ns/1ps
+module agent_tb;
+{chr(10).join(ports)}
+  {contract.top} dut ({connections});
+  integer agent_checks = 0;
+  integer agent_failures = 0;
+  task check;
+    input [{width - 1}:0] actual, expected, mask;
+    input string label;
+    begin
+      if ((^mask === 1'bx) || (^(expected & mask) === 1'bx)) begin
+        $display("AGENT_CHECKER_ERROR unknown expected/mask %s", label);
+        $fatal(1, "invalid oracle");
+      end
+      if (mask == 0) begin
+        $display("AGENT_CHECKER_ERROR empty mask %s", label);
+        $fatal(1, "empty comparison");
+      end
+      agent_checks = agent_checks + 1;
+      if ((actual & mask) !== (expected & mask)) begin
+        agent_failures = agent_failures + 1;
+        $display("AGENT_MISMATCH t=%0t case=%s actual=%0h expected=%0h mask=%0h",
+                 $time, label, actual, expected, mask);
+        if (agent_failures >= 8) $fatal(1, "too many mismatches");
+      end
+    end
+  endtask
+{self.declarations}
+  initial begin
+{chr(10).join(init)}
+{self.stimulus}
+    if (agent_checks == 0) begin
+      $display("AGENT_CHECKER_ERROR no comparisons executed");
+      $fatal(1, "empty self-test");
+    end
+    if (agent_failures != 0) $fatal(1, "functional mismatches");
+    $display("AGENT_SELFTEST_PASS checks=%0d", agent_checks);
+    $finish;
+  end
+  initial begin
+    #1000000;
+    $display("AGENT_CHECKER_ERROR simulation watchdog expired");
+    $fatal(1, "self-test timeout");
+  end
+endmodule
+"""
+
+
+def parse_selftest(text: str, contract: Contract) -> SelfTest:
+    text = strip_think(text).strip()
+    fenced = re.fullmatch(r"```(?:json)?\s*\n(.*?)```\s*", text, re.S)
+    data = json.loads(fenced.group(1) if fenced else text)
+    if not isinstance(data, dict):
+        raise ValueError("self-test response must be a JSON object")
+    for field in ("declarations", "stimulus", "coverage"):
+        if not isinstance(data.get(field), str):
+            raise ValueError(f"self-test field {field} must be a string")
+    test = SelfTest(data["declarations"], data["stimulus"], data["coverage"],
+                    str(data.get("uncertainties", "")))
+    code = test.declarations + "\n" + test.stimulus
+    # The model can supply a reference model and stimuli, not verdict machinery.
+    forbidden = (r"\bagent_\w*\b|\bdut\b|\b(?:module|endmodule|initial|always"
+                 r"|always_ff|always_comb|final|fork|join|force|release|bind)\b"
+                 r"|\$(?!signed\b|unsigned\b|clog2\b|bits\b|random\b|urandom\b"
+                 r"|urandom_range\b|sformatf\b)[A-Za-z_]\w*|`")
+    inspected = re.sub(r'"(?:\\.|[^"\\])*"', '""', strip_comments(code))
+    match = re.search(forbidden, inspected)
+    if match:
+        raise ValueError("self-test contains forbidden control or DUT introspection: "
+                         + match.group(0))
+    # Models often echo supplied ports. Drop equivalent standalone declarations;
+    # reject width changes. Never normalize declarations inside helper routines.
+    protected = [(m.start(), m.end()) for m in re.finditer(
+        r"\bfunction\b.*?\bendfunction\b|\btask\b.*?\bendtask\b",
+        test.declarations, re.S)]
+    port_widths = {n: w for _, w, n in contract.ports}
+    edits = []
+    for match in re.finditer(r"\b(?:reg|wire|logic)\s+"
+                             r"(\[\s*(\d+)\s*:\s*(\d+)\s*\]\s*)?"
+                             r"([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*;",
+                             test.declarations):
+        if any(start <= match.start() < end for start, end in protected):
+            continue
+        names = [n.strip() for n in match.group(4).split(",")]
+        width = abs(int(match.group(2)) - int(match.group(3))) + 1 if match.group(1) else 1
+        duplicate = [n for n in names if n in port_widths]
+        for name in duplicate:
+            if width != port_widths[name]:
+                raise ValueError(f"duplicate port '{name}' is {width} bits; controller "
+                                 f"already declares {port_widths[name]} bits")
+        if duplicate:
+            kept = [n for n in names if n not in duplicate]
+            prefix = match.group()[:match.start(4) - match.start()]
+            edits.append((match.start(), match.end(),
+                          prefix + ", ".join(kept) + ";" if kept else ""))
+    for start, end, replacement in reversed(edits):
+        test.declarations = test.declarations[:start] + replacement + test.declarations[end:]
+    if re.search(r"\b(?:task|function)\b[^;]*\bcheck\b", inspected):
+        raise ValueError("self-test must not redefine check")
+    if not re.search(r"\bcheck\s*\(", test.stimulus):
+        raise ValueError("self-test has no check calls")
+    actuals = re.findall(r"\bcheck\s*\(([^,;]*)", strip_comments(test.stimulus))
+    outputs = [n for d, _, n in contract.ports if d == "output"]
+    if not any(re.search(rf"\b{re.escape(n)}\b", actual)
+               for n in outputs for actual in actuals):
+        raise ValueError("check actual argument must observe a DUT output")
+    test.render(contract)  # Validate supported ports before launching tools.
+    return test
+
+
+def generate_selftest(llm: LLM, prompt: str, interface: str, contract: Contract,
+                      timeout_s: float, previous_error: str = "",
+                      previous_response: str = "",
+                      record=lambda result, elapsed: None) -> SelfTest:
+    if not contract.ports or not any(d == "output" for d, _, _ in contract.ports):
+        raise ValueError("no reliable output interface for independent self-test")
+    messages = [
+        {"role": "system", "content": """You write an independent SystemVerilog
+reference checker from a specification. You will NOT see the DUT implementation.
+Return ONLY a JSON object with string fields declarations, stimulus, coverage,
+uncertainties. The controller supplies module agent_tb, input regs initialized to
+zero, output wires, the DUT instance, a watchdog and a comparison task:
+  check(actual, expected, mask, "case description / cycle / input");
+All vector arguments are zero-extended to at least 1024 bits. Use explicitly sized
+masks for the output bits being compared. Each call must check at least one bit.
+declarations: reference variables, localparams and helper tasks/functions only.
+NEVER redeclare the input/output ports; their exact names and widths are in the
+parsed contract. Declare all helper variables here, not halfway through a block.
+stimulus: statements INSIDE an existing initial begin/end; no initial/module.
+Use # delays and explicit clock assignments; do not generate an always clock.
+Drive away from the sampling edge, sample after #1 for settled NBA values.
+Never call $display/$finish/$fatal/$stop or access dut or agent_* names.
+$sformatf for a check label is allowed. Use localparam integer, not INTEGER.
+Only check() establishes pass/fail. Expected values MUST follow the spec, not a
+guessed circuit. Independently enumerate small truth tables/K-maps using their
+actual row/column labels and care masks. For sequential designs use a reference
+transition table and cycle count. Cover reset off-edge/on-edge and release,
+priorities, boundary counts, asymmetric shifts, overlaps, back-to-back frames
+and error recovery as relevant. Do not assume all history is cleared on reset.
+Do not compare unspecified initial states or don't-care bits. If an oracle cannot
+be derived reliably, put the reason in uncertainties and do not invent expected
+values. Keep the test bounded to at most 2048 cycles, avoid huge unrolled code.
+Use ordinary Verilog syntax (integer, reg, explicit widths) in the body.
+CRITICAL: A synchronous reset must be asserted THROUGH an active clock edge.
+The sequence "#1 reset=1; #1 reset=0;" without a clock edge does NOT reset a DUT.
+Initialize a synchronous design by holding reset through at least one active
+edge, allow #1 for NBA updates, then release away from the edge. Later reset
+tests must obey the same rule. An off-edge reset assertion must leave a
+synchronous output unchanged until the next active edge. Never expect power-up
+values before a specified initialization or reset. For asynchronous reset,
+also test the off-edge effect explicitly.
+"""},
+        {"role": "user", "content": "Specification:\n" + prompt
+         + "\nInterface:\n" + interface
+         + "\nParsed contract:\n" + json.dumps(contract.to_dict(), ensure_ascii=False)
+         + ("\nPrevious checker construction error (fix the checker):\n" + previous_error
+            + "\nPrevious checker response:\n" + previous_response
+            if previous_error else "")},
+    ]
+    started = time.monotonic()
+    result = llm.chat(messages, timeout_s=timeout_s, max_tokens=4096)
+    record(result, time.monotonic() - started)
+    return parse_selftest(result.text, contract)
+
+
+def review_selftest(llm: LLM, prompt: str, interface: str, contract: Contract,
+                    test: SelfTest, timeout_s: float,
+                    record=lambda result, elapsed: None) -> SelfTest:
+    """Review the oracle before it sees any DUT behavior; freeze it afterwards."""
+    instruction = (
+        "Independently audit this proposed checker against the ORIGINAL specification. "
+        "Return the complete corrected checker JSON, keeping valid tests. Check "
+        "especially: synchronous reset must span an active clock edge, off-edge "
+        "synchronous reset must NOT clear outputs, initialization before comparison, "
+        "old/new-state observation, MSB/LSB order, care masks and priorities. "
+        "Do not change expected values to fit an implementation: none is provided. "
+        "Ensure coverage includes boundary and mixed/nonuniform input values, not "
+        "only all-zero and all-one patterns. Do not merely repeat the coverage prose."
+    )
+    return generate_selftest(
+        llm, prompt, interface, contract, timeout_s,
+        previous_error=instruction,
+        previous_response=json.dumps(test.__dict__), record=record)

@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "track": "rtl",
+  "model": {
+    "name": "Qwen/Qwen2.5-Coder-32B-Instruct-GGUF",
+    "source": "https://huggingface.co/Qwen/Qwen2.5-Coder-32B-Instruct-GGUF",
+    "revision": "6ad0cdf",
+    "file": "qwen2.5-coder-32b-instruct-q4_k_m.gguf",
+    "sha256": "4d64b316b5e6319d9613e0d97935d9ebd631fc7e334da400d00085eca749d085",
+    "quantization": "GGUF-Q4_K_M",
+    "parameters": "32.76B",
+    "measured_vram_gb": 25.1,
+    "finetuned": false,
+    "finetune_weights_url": null
+  },
+  "auxiliary_models": [],
+  "context": {
+    "max_model_len": 24576,
+    "max_output_tokens": 16384,
+    "rope_scaling": null
+  },
+  "generation": {
+    "chat_template_kwargs": {
+      "enable_thinking": false
+    },
+    "reasoning_effort": null
+  },
+  "serving": {
+    "backend": "llama.cpp",
+    "version": "0.4.0-dev (commit f114f91)",
+    "start_command": "./serve/vllm.sh",
+    "port": 8000,
+    "model_path": "/models/qwen2.5-coder-32b-instruct-q4_k_m.gguf",
+    "args": {
+      "host": "127.0.0.1",
+      "context": 24576,
+      "gpu_layers": 999,
+      "parallel_slots": 1,
+      "split_mode": "none"
+    }
+  },
+  "endpoints": {
+    "solve": "./run.sh",
+    "baseline": "./run_baseline.sh",
+    "http_port": 7860
+  },
+  "agent": {
+    "max_rounds": 5,
+    "tools": [
+      "check_interface",
+      "check_semantics",
+      "lint",
+      "synth",
+      "simulate"
+    ],
+    "skills": [
+      "rtl-module-interface-contract",
+      "rtl-sequential-timing"
+    ]
+  }
+}

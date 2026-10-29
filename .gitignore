@@ -1,0 +1,26 @@
+# Runtime and EDA output
+outputs/
+*.log
+*.jou
+*.str
+.Xil/
+xsim.dir/
+*.vcd
+
+# Local environment and model weights
+.env
+env.sh
+*.gguf
+*.bin
+*.safetensors
+models/
+
+# Python and editor files
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+.ipynb_checkpoints/
+.vscode/
+.idea/

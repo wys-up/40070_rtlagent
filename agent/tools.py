@@ -1,0 +1,515 @@
+"""Local RTL checks without official fixtures.
+
+Lint and synthesis reject specific dangerous diagnostics even on exit code zero.
+Simulation requires a completed controller-owned verdict with positive checks.
+Full logs survive scratch cleanup in the output checks directory.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import shutil
+import signal
+import subprocess
+import tempfile
+import textwrap
+import time
+
+PART = os.environ.get("RTL_PART", "xczu3eg-sbva484-1-e")
+
+
+class RtlToolchain:
+    def __init__(self, artifact_dir: str | None = None) -> None:
+        self.xvlog = shutil.which("xvlog")
+        self.xelab = shutil.which("xelab")
+        self.xsim = shutil.which("xsim")
+        self.vivado = shutil.which("vivado")
+        self.artifact_dir = artifact_dir
+        self.round = 0
+        self.simulation_attempt = 0
+        self.lint_attempt = 0
+        self.reason = ""
+        missing = [n for n, p in (("xvlog", self.xvlog), ("xelab", self.xelab),
+                                  ("vivado", self.vivado)) if not p]
+        if missing:
+            self.reason = (f"not on PATH: {', '.join(missing)}; "
+                           "source your Vivado settings64.sh")
+
+    @property
+    def available(self) -> bool:
+        return not self.reason
+
+    @property
+    def simulation_available(self) -> bool:
+        return bool(self.xvlog and self.xelab and self.xsim)
+
+    def record(self, name: str, text: str) -> None:
+        if self.artifact_dir:
+            path = os.path.join(self.artifact_dir, f"round-{self.round:02d}")
+            os.makedirs(path, exist_ok=True)
+            with open(os.path.join(path, name), "w", encoding="utf-8") as fh:
+                fh.write(text)
+
+    # ------------------------------------------------------------------ lint
+
+    def lint(self, source: str, top: str, timeout_s: float = 300.0) -> tuple[int, str]:
+        """Analyze and elaborate the DUT on its own.
+
+        rc =  0  the module analyzes and elaborates
+        rc =  1  the tools ran and rejected it
+        rc = -1  the tools could not be run
+        """
+        if not self.available:
+            return -1, f"vivado unavailable: {self.reason}"
+
+        work = tempfile.mkdtemp(prefix="agent_lint_", dir=_scratch_dir())
+        self.lint_attempt += 1
+        attempt = self.lint_attempt
+        started = time.monotonic()
+        log = ""
+        try:
+            src = os.path.join(work, "solution.sv")
+            with open(src, "w") as fh:
+                fh.write(source)
+
+            rc, out = _run([self.xvlog or "xvlog", "--sv", "solution.sv"], work, timeout_s)
+            log = out
+            if rc != 0:
+                return 1, summarize_log(out)
+            if dangerous_warnings(out):
+                return 1, summarize_log(out)
+
+            rc, out2 = _run([self.xelab or "xelab", top, "-s", "dutsim"], work,
+                            timeout_s - (time.monotonic() - started))
+            log += "\n" + out2
+            return (0 if rc == 0 and not dangerous_warnings(log) else 1), summarize_log(log)
+        finally:
+            self.record("lint.log", log)
+            self.record(f"lint-{attempt}.log", log)
+            if os.environ.get("AGENT_KEEP_WORK") != "1":
+                shutil.rmtree(work, ignore_errors=True)
+
+    # ----------------------------------------------------------------- synth
+
+    def synth(self, source: str, top: str, timeout_s: float = 900.0,
+              allow_latches: bool = False) -> tuple[int, str]:
+        if not self.available:
+            return -1, f"vivado unavailable: {self.reason}"
+
+        work = tempfile.mkdtemp(prefix="agent_synth_", dir=_scratch_dir())
+        out = ""
+        try:
+            with open(os.path.join(work, "solution.sv"), "w") as fh:
+                fh.write(source)
+            with open(os.path.join(work, "synth.tcl"), "w") as fh:
+                fh.write(
+                    textwrap.dedent(
+                        f"""\
+                        read_verilog -sv solution.sv
+                        synth_design -top {top} -part {PART} -mode out_of_context
+                        """
+                    )
+                )
+            rc, out = _run(
+                [self.vivado or "vivado", "-mode", "batch", "-source", "synth.tcl",
+                 "-nojournal", "-log", "synth.log"],
+                work, timeout_s,
+            )
+            ok = (rc == 0 and "Synthesis finished" in out
+                  and not dangerous_warnings(out, allow_latches))
+            return (0 if ok else 1), summarize_log(out)
+        finally:
+            self.record("synth.log", out)
+            if os.environ.get("AGENT_KEEP_WORK") != "1":
+                shutil.rmtree(work, ignore_errors=True)
+
+    def simulate(self, source: str, testbench: str,
+                 timeout_s: float = 120.0) -> tuple[int, str]:
+        """rc=2 means a broken checker/tool run; rc=1 is an observed mismatch."""
+        if not self.simulation_available:
+            return -1, "xvlog/xelab/xsim unavailable for functional self-test"
+        work = tempfile.mkdtemp(prefix="agent_sim_", dir=_scratch_dir())
+        self.simulation_attempt += 1
+        attempt = self.simulation_attempt
+        started = time.monotonic()
+        log = ""
+        try:
+            for name, text in (("solution.sv", source), ("selftest_tb.sv", testbench)):
+                with open(os.path.join(work, name), "w", encoding="utf-8") as fh:
+                    fh.write(text)
+            commands = [
+                [self.xvlog, "--sv", "solution.sv", "selftest_tb.sv"],
+                [self.xelab, "agent_tb", "-s", "agent_selftest",
+                 "-timescale", "1ns/1ps"],
+                [self.xsim, "agent_selftest", "-runall"],
+            ]
+            for index, command in enumerate(commands):
+                rc, out = _run(command, work, timeout_s - (time.monotonic() - started))
+                log += "\n" + out
+                if index < 2 and (rc != 0 or dangerous_warnings(out)):
+                    return 2, summarize_log(log)
+                if index == 2:
+                    if "AGENT_CHECKER_ERROR" in out:
+                        return 2, summarize_log(log)
+                    if "AGENT_MISMATCH" in out:
+                        return 1, summarize_log(log)
+                    passed = re.search(r"AGENT_SELFTEST_PASS checks=([1-9]\d*)", out)
+                    if rc == 0 and passed:
+                        return 0, summarize_log(log)
+                    return 2, "self-test has no valid completed verdict\n" + summarize_log(log)
+            return 2, "self-test did not execute"
+        finally:
+            self.record("simulation.log", log)
+            self.record("selftest_tb.sv", testbench)
+            self.record(f"simulation-{attempt}.log", log)
+            self.record(f"selftest_tb-{attempt}.sv", testbench)
+            if os.environ.get("AGENT_KEEP_WORK") != "1":
+                shutil.rmtree(work, ignore_errors=True)
+
+
+# ------------------------------------------------------- interface checking
+
+_MODULE_RE = re.compile(r"module\s+(\w+)\s*(?:#\s*\([^)]*\)\s*)?\((.*?)\)\s*;", re.DOTALL)
+
+
+# 题面里的端口清单。VerilogEval 的 spec-to-rtl 题面长这样：
+#
+#     I would like you to implement a module named TopModule with the following
+#     interface. All input and output ports are one bit unless otherwise specified.
+#
+#      - input  clk
+#      - input  d   (8 bits)
+#      - output q   (8 bits)
+#
+# 实测 156 道题里 153 道是这个格式（位宽可缺省、括号内可有多余空格、端口名后
+# 可带逗号），其余 3 道直接在题面里贴完整的 module 声明，由 _ports() 兜住。
+# 位宽单位兼容中英文：评测题集（VerilogEval）是英文的 `(8 bits)`，本仓库的示例题
+# 是中文的 `(8 位)`。只认一种的话，带位宽的端口会被整行丢掉 —— 不是报错，是静默
+# 少几个端口，比不解析更糟。
+_PROMPT_PORT_RE = re.compile(
+    r"^\s*-\s*(input|output|inout)\s+([A-Za-z_]\w*)\s*,?"
+    r"\s*(?:\(\s*(\d+)\s*(?:bits?|位)\s*\))?\s*$",
+    re.MULTILINE)
+
+
+def ports_from_prompt(prompt: str) -> tuple[str | None, list[tuple[str, int, str]]]:
+    """从题面还原模块名与端口表。
+
+    **评测题集的 `interface` 是空串** —— 接口信息写在题面里，不另出一份
+    （见 docs/API_CONTRACT.md）。不从题面取的话，check_interface 在评测当天会
+    静默失效：输入为空、检查照常返回「通过」，而 trace 里看不出区别。
+    而接口写错在本 track 判 L0，是全表最重的惩罚，这个检查恰恰最不该失效。
+    """
+    text = prompt or ""
+    ports = [(d, int(w) if w else 1, n)
+             for d, n, w in _PROMPT_PORT_RE.findall(text)]
+    listed = re.findall(r"^\s*-\s*(?:input|output|inout)\b.*$", text, re.M)
+    if len(ports) != len(listed):
+        # A partially parsed prose list cannot justify rejecting extra ports.
+        return None, []
+    if not ports:
+        # 注意这里**不能**回退到解析题面里的 module 声明。bugs_* 那一类题面贴的
+        # 正是「有 bug 的模块」，其端口本身就是要改的东西（实测 Prob062_bugs_mux2
+        # 的题面把 8 位的 out 写成 1 位，找出它正是题目要求）。把它当规格会让
+        # 智能体把 bug 改回去。解析不出就如实返回空。
+        # 另：该题参考实现还把 sel 极性反了（sel ? a : b），题面推不出，属数据集
+        # 缺陷，见 selftest/README.md。智能体在这道题上过不了 L2 不说明修复逻辑有错。
+        return None, []
+    m = re.search(r"module\s+named\s+(\w+)", text)
+    return (m.group(1) if m else "TopModule"), ports
+
+
+def check_interface(source: str, interface: str,
+                    prompt: str = "") -> tuple[int, str]:
+    """Compare the generated module header against the declared one.
+
+    Deterministic, no tools, no model. Returns (0, "ok") or (1, <diagnosis>).
+
+    `interface` 为空时从 `prompt` 取端口表 —— 评测题集就是这种情况。
+
+    Compares the module name and the ordered list of (direction, width, name).
+    Whitespace, comments, and `wire`/`reg`/`logic` keywords are ignored -- those
+    do not affect elaboration. Everything that does affect it is compared.
+    """
+    want_name, want_ports = _ports(interface)
+    # Authoritative interfaces are strict. Prompt direction/width differences
+    # stay advisory, but missing/extra ports and wrong module names are fatal.
+    # 依据：Prob031_dff 的题面把输出 q 误写成 `- input q`，而模型三次都正确
+    # 忽略了它并判到 L3 —— 拿题面硬比对会把这种正确答案改坏。
+    advisory = False
+    if want_name is None:
+        want_name, want_ports = ports_from_prompt(prompt)
+        advisory = want_name is not None
+    got_name, got_ports = module_ports(source, want_name)
+
+    if want_name is None:
+        return 0, "接口既不在 interface 里，也没能从题面解析出端口表，本次跳过检查"
+    if got_name is None:
+        return 1, "no module declaration found in the generated code"
+
+    problems = []
+    hard_problems = []
+    if got_name != want_name:
+        hard_problems.append(f"module name is '{got_name}', must be '{want_name}'")
+
+    want_map = {n: (d, w) for d, w, n in want_ports}
+    got_map = {n: (d, w) for d, w, n in got_ports}
+
+    for name in want_map:
+        if name not in got_map:
+            hard_problems.append(f"missing port '{name}'")
+    for name in got_map:
+        if name not in want_map:
+            hard_problems.append(f"extra port '{name}' not in the declared interface")
+    for name in want_map.keys() & got_map.keys():
+        wd, ww = want_map[name]
+        gd, gw = got_map[name]
+        if wd != gd:
+            problems.append(f"port '{name}' is {gd}, must be {wd}")
+        if ww and gw and ww != gw:
+            problems.append(f"port '{name}' is {gw} bits, must be {ww}")
+
+    if hard_problems:
+        return 1, "interface mismatch: " + "; ".join(hard_problems + problems)
+    if not problems:
+        return 0, ("interface matches the declaration" if not advisory
+                   else "interface matches the port list read from the prompt")
+    if advisory:
+        # 题面推出来的规格只作提示：rc=0 让流程继续，但把差异写进 trace，
+        # 由调用方决定要不要喂给下一轮。硬判会把 Prob031_dff 那种
+        # 「题面写错、模型写对」的正确答案改坏。
+        return 0, ("⚠ 与题面端口清单不符（题面为散文，仅供参考，未拦截）: "
+                   + "; ".join(problems))
+    return 1, "interface mismatch: " + "; ".join(problems)
+
+
+def strip_comments(text: str) -> str:
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
+    return re.sub(r"//[^\n]*", "", text)
+
+
+def module_ports(text: str, top: str | None = None) -> tuple[str | None, list[tuple[str, int, str]]]:
+    """Read simple ANSI/non-ANSI ports; unresolved parameter widths are unknown (0)."""
+    stripped = strip_comments(text)
+    modules = list(_MODULE_RE.finditer(stripped))
+    m = next((m for m in modules if m.group(1) == top), None)
+    if m is None and modules:
+        m = modules[0]
+    if not m:
+        return None, []
+
+    ports: list[tuple[str, int, str]] = []
+    direction = None
+    width = 1
+    header = m.group(2)
+    if not re.search(r"\b(input|output|inout)\b", header):
+        end = stripped.find("endmodule", m.end())
+        body = stripped[m.end():end if end >= 0 else None]
+        declared = {}
+        for decl in re.findall(r"\b(?:input|output|inout)\b[^;]*;", body):
+            _, parsed = module_ports("module ports(" + decl.rstrip(";") + ");")
+            declared.update({n: (d, w, n) for d, w, n in parsed})
+        for name in header.split(","):
+            name = name.strip()
+            if name not in declared:
+                return m.group(1), []
+            ports.append(declared[name])
+        return m.group(1), ports
+    for decl in header.split(","):
+        decl = decl.strip()
+        if not decl:
+            continue
+        d = re.match(r"\b(input|output|inout)\b", decl)
+        if d:
+            direction = d.group(1)
+            width = 1
+        if direction is None:
+            continue          # ANSI list with a leading type-only entry
+        rng = re.search(r"\[\s*(\d+)\s*:\s*(\d+)\s*\]", decl)
+        if rng:
+            width = abs(int(rng.group(1)) - int(rng.group(2))) + 1
+        elif "[" in decl:
+            width = 0
+        name = re.sub(r"\[[^\]]*\]", " ", decl).split()[-1]
+        ports.append((direction, width, name))
+    return m.group(1), ports
+
+
+def _ports(text: str) -> tuple[str | None, list[tuple[str, int, str]]]:
+    return module_ports(text)
+
+
+def repair_output_declarations(source: str, log: str, top: str) -> tuple[str, list[str]]:
+    """Compiler-directed type repair only; never rewrite expressions or timing."""
+    targets = set(re.findall(r"procedural assignment to a non-register (\w+)", log))
+    targets.update(re.findall(r"redeclaration of ANSI port '(\w+)'", log))
+    header = next((m for m in _MODULE_RE.finditer(source) if m.group(1) == top), None)
+    if not header or not targets:
+        return source, []
+    text = header.group(2)
+    changes = []
+    # Limit this mechanical repair to numeric scalar/vector ANSI outputs.
+    for target in sorted(targets):
+        pattern = re.compile(r"\boutput\s+(?:(?:wire|reg|logic)\s+)?"
+                             r"(?:\[\s*\d+\s*:\s*\d+\s*\]\s*)?"
+                             r"[A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*(?=\s*(?:,|$))")
+        group = next((m for m in pattern.finditer(text)
+                      if re.search(rf"\b{re.escape(target)}\b", m.group())), None)
+        if group is None:
+            continue
+        # A separate reg declaration is removed only if it has no initializer
+        # and exactly the same width as the ANSI declaration.
+        body_start = header.end()
+        body_end = source.find("endmodule", body_start)
+        body = source[body_start:body_end if body_end >= 0 else None]
+        redecl = re.search(rf"(?m)^\s*reg\s*(\[\s*\d+\s*:\s*\d+\s*\])?\s+"
+                           rf"{re.escape(target)}\s*;\s*$", body)
+        if "redeclaration of ANSI port" in log and target not in set(re.findall(
+                r"procedural assignment to a non-register (\w+)", log)):
+            if redecl is None:
+                continue
+            rng = re.search(r"\[\s*(\d+)\s*:\s*(\d+)\s*\]", group.group())
+            got_rng = re.search(r"\[\s*(\d+)\s*:\s*(\d+)\s*\]", redecl.group())
+            if (rng.groups() if rng else None) != (got_rng.groups() if got_rng else None):
+                continue
+        replacement = re.sub(r"^output\s+(?:(?:wire|reg|logic)\s+)?",
+                             "output reg ", group.group())
+        text = text[:group.start()] + replacement + text[group.end():]
+        changes.append(f"ANSI output {target}: procedural variable declaration in header")
+        if redecl:
+            offset = body_start + redecl.start()
+            source = source[:offset] + "\n" + source[body_start + redecl.end():]
+    if changes:
+        source = source[:header.start(2)] + text + source[header.end(2):]
+    return source, changes
+
+
+# --------------------------------------------------------------------- utils
+
+
+_ACTIVE_TOOLS: set[subprocess.Popen] = set()
+
+
+def _stop_tool(proc: subprocess.Popen) -> None:
+    if os.name == "posix":
+        # Tools inherit the task group, so the evaluator's group kill reaches
+        # them too. For a single tool timeout, stop only this process tree.
+        descendants = []
+        pending = [proc.pid]
+        while pending:
+            pid = pending.pop()
+            try:
+                with open(f"/proc/{pid}/task/{pid}/children") as fh:
+                    children = [int(child) for child in fh.read().split()]
+            except OSError:
+                children = []
+            descendants.extend(children)
+            pending.extend(children)
+        for pid in reversed(descendants):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        if proc.poll() is None:
+            proc.kill()
+    elif proc.poll() is None:
+        proc.kill()
+
+
+def stop_active_tools() -> None:
+    """Stop tools before returning the retained solution on cancellation."""
+    for proc in list(_ACTIVE_TOOLS):
+        _stop_tool(proc)
+        proc.wait(timeout=5)
+
+
+def _run(cmd: list[str], cwd: str, timeout_s: float) -> tuple[int, str]:
+    if timeout_s <= 0:
+        return 124, "[agent] verification budget exhausted"
+    try:
+        proc = subprocess.Popen(
+            cmd, cwd=cwd,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            errors="replace",
+        )
+        _ACTIVE_TOOLS.add(proc)
+        try:
+            out, _ = proc.communicate(timeout=timeout_s)
+            return proc.returncode, out
+        except subprocess.TimeoutExpired:
+            _stop_tool(proc)
+            out, _ = proc.communicate()
+            return 124, out + f"\n[agent] {cmd[0]} timed out after {timeout_s:.1f}s"
+        finally:
+            if proc.poll() is None:
+                _stop_tool(proc)
+                proc.wait(timeout=5)
+            _ACTIVE_TOOLS.discard(proc)
+    except OSError as exc:
+        return -1, f"[agent] could not launch {cmd[0]}: {exc}"
+
+
+def _scratch_dir() -> str:
+    """Local disk, never network storage.
+
+    Vivado produces large numbers of small files. On the NFS-backed /workspace of
+    the cloud platform that is pathologically slow. This is not an optimisation.
+
+    Section 9 of docs/API_CONTRACT.md names `/tmp/eda` and the base image exports it
+    as `EDA_TMP`. Honour it -- running run.sh directly (rather than through
+    serve_api.py, which passes `AGENT_TMP`) otherwise lands in `/tmp`, which is
+    local disk too but not the directory the platform cleans up for you.
+
+    `TRACK_TMP` is the old name of `EDA_TMP`, kept as a fallback.
+    """
+    path = (os.environ.get("AGENT_TMP")
+            or os.environ.get("EDA_TMP")
+            or os.environ.get("TRACK_TMP")
+            or tempfile.gettempdir())
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+_DANGEROUS = re.compile(
+    r"VRFC 10-3705|Synth 8-(?:6858|6859)|"
+    r"(?:out of (?:bounds|range)|multi[- ]?driven|multiple (?:constant )?drivers|"
+    r"driven by multiple|conflicting drivers)", re.I)
+_LATCH = re.compile(r"(?:inferr?ed|inferring).{0,80}\blatch|"
+                    r"\blatch.{0,80}(?:inferr?ed|inferring)", re.I)
+
+
+def dangerous_warnings(log: str, allow_latches: bool = False) -> list[str]:
+    return [line for line in log.splitlines()
+            if _DANGEROUS.search(line) or (not allow_latches and _LATCH.search(line))]
+
+
+_INTERESTING = (
+    "ERROR:", "CRITICAL WARNING:", "error:",
+    "Synthesis finished", "Synthesis failed", "Mismatches:",
+    "AGENT_", "[agent]",
+)
+
+
+def summarize_log(log: str, budget: int = 2000) -> str:
+    """Compress a tool log to something a model can actually read.
+
+    A Vivado synthesis log runs to thousands of lines. Feeding it back whole eats
+    the context window and buries the one line that matters. Keep the lines that
+    carry a verdict, drop the rest, and mark the truncation honestly.
+    """
+    lines = [ln.rstrip() for ln in log.splitlines()]
+    # A large inferred-memory/latch listing must not bury multi-driver or
+    # out-of-bounds diagnostics in the limited model context.
+    warnings = dangerous_warnings(log)
+    critical = ([ln for ln in warnings if _DANGEROUS.search(ln)]
+                + [ln for ln in warnings if not _DANGEROUS.search(ln)])
+    keep = critical + [ln for ln in lines
+                       if ln not in critical and any(k in ln for k in _INTERESTING)]
+    if not keep:
+        keep = lines[-40:]
+
+    text = "\n".join(keep)
+    if len(text) > budget:
+        text = text[:budget] + f"\n... [truncated, {len(text) - budget} more chars]"
+    return text
