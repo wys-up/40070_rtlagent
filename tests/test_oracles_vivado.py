@@ -2,9 +2,9 @@
 
 import unittest
 
-from example.agent.oracles import from_spec
-from example.agent.spec_contract import extract_contract
-from example.agent.tools import RtlToolchain
+from agent.oracles import from_spec
+from agent.spec_contract import extract_contract
+from agent.tools import RtlToolchain
 
 
 class VivadoOracleTests(unittest.TestCase):

@@ -14,7 +14,7 @@ from unittest.mock import patch
 from fastapi import HTTPException
 from pydantic import ValidationError
 
-from example.serve import serve_api
+from serve import serve_api
 
 
 class ServeApiTests(unittest.TestCase):

@@ -8,12 +8,12 @@ import time
 import unittest
 from unittest.mock import Mock, patch
 
-from example.agent import main, tools
-from example.agent.llm import LLM, LLMError, LLMResult, extract_code
-from example.agent.skills import load_skills, select
-from example.agent.spec_contract import extract_contract, check_semantics, repair_synchronous_events
-from example.agent.verification import SelfTest, generate_selftest, parse_selftest
-from example.agent.oracles import from_spec
+from agent import main, tools
+from agent.llm import LLM, LLMError, LLMResult, extract_code
+from agent.skills import load_skills, select
+from agent.spec_contract import extract_contract, check_semantics, repair_synchronous_events
+from agent.verification import SelfTest, generate_selftest, parse_selftest
+from agent.oracles import from_spec
 
 
 INTERFACE = "module TopModule(input a, input b, output q);"
@@ -420,7 +420,7 @@ class DeadlineProcessTests(unittest.TestCase):
         source = """
 import sys, time
 from unittest.mock import patch
-from example.agent import main
+from agent import main
 def blocked(llm, trace, prompt, interface, top, save, deadline_at):
     save('module TopModule; endmodule\\n')
     time.sleep(60)

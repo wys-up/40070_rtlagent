@@ -1,7 +1,7 @@
 """Development-only regressions; this harness, not the agent, may use official TBs.
 
 Run from repository root after sourcing the local model/Vivado environment:
-python3 -m example.tests.regression_agent --root /workspace/rtlagent2026 --real
+python3 -m tests.regression_agent --root /workspace/rtlagent2026 --real
 """
 
 import argparse
@@ -13,10 +13,10 @@ import subprocess
 import sys
 import time
 
-from example.agent.main import infer_top
-from example.agent.spec_contract import extract_contract, check_semantics
-from example.agent.tools import RtlToolchain, check_interface
-from example.agent.verification import SelfTest
+from agent.main import infer_top
+from agent.spec_contract import extract_contract, check_semantics
+from agent.tools import RtlToolchain, check_interface
+from agent.verification import SelfTest
 
 
 def main():
