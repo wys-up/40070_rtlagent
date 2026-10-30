@@ -213,7 +213,10 @@ def parse_selftest(text: str, contract: Contract) -> SelfTest:
     if re.search(r"\b(?:task|function)\b[^;]*\bcheck\b", inspected):
         raise ValueError("self-test must not redefine check")
     if not re.search(r"\bcheck\s*\(", test.stimulus):
-        raise ValueError("self-test has no check calls")
+        raise ValueError("self-test has no check calls in stimulus; put executable "
+                         "check(actual_output, expected, nonzero_mask, label) calls "
+                         "directly in stimulus after driving and settling inputs, "
+                         "not in coverage or helper declarations")
     actuals = re.findall(r"\bcheck\s*\(([^,;]*)", strip_comments(test.stimulus))
     outputs = [n for d, _, n in contract.ports if d == "output"]
     if not any(re.search(rf"\b{re.escape(n)}\b", actual)
@@ -246,12 +249,16 @@ End a standalone delay with a semicolon: #1; before end/endtask/endfunction.
 NEVER redeclare the input/output ports; their exact names and widths are in the
 parsed contract. Declare all helper variables here, not halfway through a block.
 stimulus: statements INSIDE an existing initial begin/end; no initial/module.
+Put every check(...) call directly in stimulus, interleaved with input driving
+and settling. Helpers may compute references or tick clocks, not call check().
+coverage: plain-language summary only; code placed here is NEVER executed.
 Local ordinary variables must not shadow DUT ports. Put constants in declarations;
 use explicit for loops, not foreach or custom types.
 Use # delays and explicit clock assignments; do not generate an always clock.
 Drive away from the sampling edge, sample after #1 for settled NBA values.
 Never call $display/$finish/$fatal/$stop or access dut or agent_* names.
 $sformatf for a check label is allowed. Use localparam integer, not INTEGER.
+Use an integer cycle counter or a static string for labels, not $time/$realtime.
 Only check() establishes pass/fail. Expected values MUST follow the spec, not a
 guessed circuit. Independently enumerate small truth tables/K-maps using their
 actual row/column labels and care masks. For sequential designs use a reference
@@ -278,15 +285,25 @@ also test the off-edge effect explicitly.
 """},
         {"role": "user", "content": "Specification:\n" + prompt
          + "\nInterface:\n" + interface
-         + "\nParsed contract:\n" + json.dumps(contract.to_dict(), ensure_ascii=False)
-         + ("\nPrevious checker construction error (fix the checker):\n" + previous_error
-            + "\nPrevious checker response:\n" + previous_response
-            if previous_error else "")},
+         + "\nParsed contract:\n" + json.dumps(contract.to_dict(), ensure_ascii=False)},
     ]
+    if previous_error:
+        if previous_response:
+            messages.append({"role": "assistant", "content": previous_response})
+        messages.append({"role": "user", "content":
+                         "The previous checker was rejected. Correct the checker, "
+                         "not the specification. Return the complete corrected JSON "
+                         "with declarations, stimulus, coverage and uncertainties. "
+                         "Put executable check(...) calls directly in stimulus; "
+                         "coverage is prose only. Do not repeat the reported error.\n"
+                         "Validation feedback:\n" + previous_error})
     started = time.monotonic()
     result = llm.chat(messages, timeout_s=timeout_s,
                       max_tokens=SELFTEST_MAX_TOKENS)
     record(result, time.monotonic() - started)
+    if result.finish_reason == "length":
+        raise ValueError("checker generation was truncated; shorten the checker "
+                         "using bounded loops and return complete JSON")
     return parse_selftest(result.text, contract)
 
 

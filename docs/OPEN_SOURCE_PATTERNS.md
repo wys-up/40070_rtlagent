@@ -50,3 +50,25 @@ checker 有效率与官方通过率应在对应提交的服务器批次中验证
 packed width 中的嵌套索引用平衡括号处理；字符串/注释之外的 escaped identifier 拒绝。
 这是一种受限语法边界，不声称实现完整 SystemVerilog 作用域分析；程序化 oracle
 使用可信代码生成路径，不依赖模型 checker 的受限声明解析。
+
+## 生成器的错误反馈
+
+继续汇总 r11 各题和 r12 已完成两题的日志，发现重复的协议错误：
+检查调用放入不执行的 coverage 字段或 helper、actual 未观察 DUT 输出，
+以及标签中使用不支持的 `$time`。其中 r12 半加器三次响应完全相同；
+双边沿检测三次仍把检查放在 coverage 中。这是跨题的生成协议问题，
+与官方功能失配分开统计。
+
+沿用 Pi/Hermes 中“保留先前工具请求、随后反馈具体校验错误”的恢复思路：
+独立生成器以 assistant 消息保存先前 checker，紧跟 user 校验反馈，
+避免把错误写在整段坏响应之前、让重复输出成为最后一段上下文。
+这里只使用已有 chat 消息和最多三次构造机会，不增加工具调度框架。
+提示明确 check 调用直接放 stimulus、coverage 只写说明、标签用计数器；
+不改变 oracle 期望值、不执行 coverage，也不放宽 parser 的接受条件。
+即使响应碰巧为可解析 JSON，generation 的 length 截断也明确拒绝。
+
+对应回归覆盖坏响应的角色与反馈顺序、规格隔离和截断拒绝。
+Windows 虚拟环境执行 Ran 78、OK、skipped=10；Linux/Vivado 及真实模型
+验证另记。系统默认 Python 缺少 requests/fastapi，首次用它运行的测试失败；
+切换项目已有 `.venv/Scripts/python.exe` 后通过，没有因此修改依赖或跳过错误。
+以上是协议修正，尚不声称改善真实题目通过率或 ReadTimeout。

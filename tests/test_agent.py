@@ -220,6 +220,34 @@ class SelfTestTests(unittest.TestCase):
         self.assertEqual(llm.chat.call_args.kwargs["timeout_s"], 9)
         self.assertEqual(llm.chat.call_args.kwargs["max_tokens"], 2048)
 
+    def test_checker_recovery_feedback_follows_previous_assistant_response(self):
+        llm = Mock()
+        llm.chat.return_value = LLMResult(json.dumps(TEST.__dict__))
+        previous = json.dumps(dict(declarations="", stimulus="a=1; b=0; #1;",
+                                   coverage='check(q,0,1,"misplaced");'))
+        with self.assertRaises(ValueError) as rejected:
+            parse_selftest(previous, self.contract)
+        generate_selftest(llm, "AND specification", INTERFACE, self.contract, 9,
+                          previous_error=str(rejected.exception),
+                          previous_response=previous)
+        messages = llm.chat.call_args.args[0]
+        self.assertEqual([m["role"] for m in messages],
+                         ["system", "user", "assistant", "user"])
+        self.assertEqual(messages[-2]["content"], previous)
+        self.assertIn(str(rejected.exception), messages[-1]["content"])
+        self.assertNotIn(previous, messages[1]["content"])
+        self.assertNotIn("assign q", str(messages))
+
+    def test_truncated_checker_is_rejected_even_if_json_is_complete(self):
+        llm = Mock()
+        llm.chat.return_value = LLMResult(json.dumps(TEST.__dict__),
+                                         finish_reason="length")
+        record = Mock()
+        with self.assertRaisesRegex(ValueError, "generation was truncated"):
+            generate_selftest(llm, "AND specification", INTERFACE,
+                              self.contract, 9, record=record)
+        record.assert_called_once()
+
     def test_class_only_helper_qualifiers_rejected_before_review(self):
         for qualifier in ("local", "protected", "virtual"):
             with self.subTest(qualifier=qualifier):

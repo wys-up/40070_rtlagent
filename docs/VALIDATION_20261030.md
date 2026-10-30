@@ -166,3 +166,14 @@ AND DUT，并拒绝 OR 变异。原始日志 SHA、source revision、起始时�
 
 本次是 checker 作用域兼容改动的服务器单测，不代表后续短复核与遮蔽检查已经完成
 实测，也不作为题目通过率统计。4 道新题与最新代码同题对照另记。
+
+## 后续生成器恢复修正
+
+r11 与 r12 多题出现 checker 检查调用缺失/字段错误；r12 半加器甚至连续三次
+重复相同坏响应。生成器现将先前响应置于 assistant 消息，其后给出 user 校验
+反馈；提示和错误明确区分执行的 stimulus 与仅说明的 coverage。保持严格短复核、
+冻结 checker、独立 Vivado 判定和最多三次构造不变，同时明确拒绝 length 截断。
+参见 `OPEN_SOURCE_PATTERNS.md` 的来源、证据和实现边界。
+
+Windows 项目虚拟环境测试 Ran 78、OK、skipped=10；系统默认 Python 因缺少
+requests/fastapi 的首次失败没有算作通过。服务器验证和后续新题成绩另记。
