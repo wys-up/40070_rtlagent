@@ -173,7 +173,7 @@ class RtlToolchain:
 _MODULE_RE = re.compile(r"module\s+(\w+)\s*(?:#\s*\([^)]*\)\s*)?\((.*?)\)\s*;", re.DOTALL)
 
 
-# 题面里的端口清单。VerilogEval 的 spec-to-rtl 题面长这样：
+# Prose port lists commonly use this form:
 #
 #     I would like you to implement a module named TopModule with the following
 #     interface. All input and output ports are one bit unless otherwise specified.
@@ -182,11 +182,8 @@ _MODULE_RE = re.compile(r"module\s+(\w+)\s*(?:#\s*\([^)]*\)\s*)?\((.*?)\)\s*;", 
 #      - input  d   (8 bits)
 #      - output q   (8 bits)
 #
-# 实测 156 道题里 153 道是这个格式（位宽可缺省、括号内可有多余空格、端口名后
-# 可带逗号），其余 3 道直接在题面里贴完整的 module 声明，由 _ports() 兜住。
-# 位宽单位兼容中英文：评测题集（VerilogEval）是英文的 `(8 bits)`，本仓库的示例题
-# 是中文的 `(8 位)`。只认一种的话，带位宽的端口会被整行丢掉 —— 不是报错，是静默
-# 少几个端口，比不解析更糟。
+# Widths may be omitted, followed by optional whitespace and commas. The parser
+# accepts both English and Chinese width units used by repository prompts.
 _PROMPT_PORT_RE = re.compile(
     r"^\s*-\s*(input|output|inout)\s+([A-Za-z_]\w*)\s*,?"
     r"\s*(?:\(\s*(\d+)\s*(?:bits?|位)\s*\))?\s*$",
@@ -204,10 +201,9 @@ _INLINE_INTERFACE_PORT_RE = re.compile(
 def ports_from_prompt(prompt: str) -> tuple[str | None, list[tuple[str, int, str]]]:
     """从题面还原模块名与端口表。
 
-    **评测题集的 `interface` 是空串** —— 接口信息写在题面里，不另出一份
-    （见 docs/API_CONTRACT.md）。不从题面取的话，check_interface 在评测当天会
-    静默失效：输入为空、检查照常返回「通过」，而 trace 里看不出区别。
-    而接口写错在本 track 判 L0，是全表最重的惩罚，这个检查恰恰最不该失效。
+    When the structured interface is absent, the prompt may still carry the
+    module name and port list. Parsing that fallback keeps interface checking
+    useful without treating arbitrary prose as authoritative.
     """
     text = prompt or ""
     ports = [(d, int(w) if w else 1, n)
@@ -231,10 +227,8 @@ def ports_from_prompt(prompt: str) -> tuple[str | None, list[tuple[str, int, str
             # ports.
             return None, []
     if not ports:
-        # Only trust an ANSI declaration when the prose labels it as the
-        # interface. Some VerilogEval bug-fixing prompts include a buggy module
-        # declaration as data; treating that declaration as the contract would
-        # make the interface checker enforce the bug.
+        # Only trust an ANSI declaration when the surrounding prose labels it
+        # as the interface. A code block may otherwise be example data.
         if not re.search(r"(?:following|exact)\s+interface|interface\s*:",
                          text, re.I):
             return None, []
@@ -263,17 +257,16 @@ def check_interface(source: str, interface: str,
 
     Deterministic, no tools, no model. Returns (0, "ok") or (1, <diagnosis>).
 
-    `interface` 为空时从 `prompt` 取端口表 —— 评测题集就是这种情况。
+    When `interface` is empty, the prompt port list is used as a fallback.
 
     Compares the module name and the ordered list of (direction, width, name).
     Whitespace, comments, and `wire`/`reg`/`logic` keywords are ignored -- those
     do not affect elaboration. Everything that does affect it is compared.
     """
     want_name, want_ports = _ports(interface)
-    # Authoritative interfaces are strict. Prompt direction/width differences
-    # stay advisory, but missing/extra ports and wrong module names are fatal.
-    # 依据：Prob031_dff 的题面把输出 q 误写成 `- input q`，而模型三次都正确
-    # 忽略了它并判到 L3 —— 拿题面硬比对会把这种正确答案改坏。
+    # A structured interface is authoritative. Prompt-derived direction and
+    # width differences remain advisory because prose can be ambiguous, while
+    # missing/extra ports and wrong module names remain fatal.
     advisory = False
     if want_name is None:
         want_name, want_ports = ports_from_prompt(prompt)
@@ -313,9 +306,8 @@ def check_interface(source: str, interface: str,
         return 0, ("interface matches the declaration" if not advisory
                    else "interface matches the port list read from the prompt")
     if advisory:
-        # 题面推出来的规格只作提示：rc=0 让流程继续，但把差异写进 trace，
-        # 由调用方决定要不要喂给下一轮。硬判会把 Prob031_dff 那种
-        # 「题面写错、模型写对」的正确答案改坏。
+        # Prompt-derived direction and width differences are reported for
+        # diagnostics but do not reject an otherwise compatible interface.
         return 0, ("⚠ 与题面端口清单不符（题面为散文，仅供参考，未拦截）: "
                    + "; ".join(problems))
     return 1, "interface mismatch: " + "; ".join(problems)
