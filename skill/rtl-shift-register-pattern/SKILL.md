@@ -10,9 +10,7 @@ description: Preserve sequence detector overlap and output timing, and derive LF
 
 - For a same-edge sequence match, compare the prospective window that includes the input sampled on the current edge. Comparing only old history adds a cycle. Preserve a suffix/prefix overlap only when required by the task.
 - Do not use a detector's `{history, input}` template for an LFSR, CRC or scrambler. First classify the specified topology as Fibonacci or Galois, shift direction, numbered taps, XOR/XNOR polarity and seed; then write every next-state bit equation.
-- For a right-shifting Galois register, begin with `feedback = old_state[0]` and `next_state = old_state >> 1`; each one-based tap position `p` XORs feedback into bit `p-1` if the specified polarity is XOR. This distributed feedback is not a Fibonacci XOR reduction.
-- Keep tap numbering separate from Verilog subscripts: tap `p` changes destination `next_q[p-1]`; its ordinary shift source is `old_q[p]` when `p < width`. The top destination has no shift source, so a tap there receives only the specified feedback. Do not XOR feedback into an adjacent stage.
-- As a consistency check, a five-bit right-shifting Galois XOR register with tap positions 5 and 3 has `next_q[4]=q[0]`, `next_q[3]=q[4]`, `next_q[2]=q[3]^q[0]`, `next_q[1]=q[2]`, and `next_q[0]=q[1]`.
+- Establish how the specification numbers taps before deriving destination and source bit indices. Check each next-state equation against that numbering and the stated shift direction.
 - Respect the specified reset/load/enable priority. A zero seed may be intentional; do not add automatic recovery from the all-zero state unless required.
 
 ## Behavioral Constraints

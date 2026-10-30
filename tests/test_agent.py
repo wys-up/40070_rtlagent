@@ -133,17 +133,12 @@ class InterfaceAndContractTests(unittest.TestCase):
         root = Path(main.ROOT)
         system = (root / "agent/prompts/system.md").read_text(encoding="utf-8")
         repair = (root / "agent/prompts/repair.md").read_text(encoding="utf-8")
-        for phrase in ("Moore", "Galois", "p-1", "gshare", "PHT",
-                       "组合产生", "只有 `train_valid && train_mispredicted`",
-                       "计数器始终按真实结果 `train_taken` 增减",
-                       "{train_history[5:0], train_taken}",
+        for phrase in ("Moore", "LFSR", "分支预测器", "并发查询",
                        "每个 data bit", "错误 stop"):
             self.assertIn(phrase, system)
         self.assertIn("保持原有状态转移条件", repair)
         self.assertIn("行为等价", repair)
         self.assertIn("每个寄存器分别", repair)
-        self.assertIn("old_q[p]", (root / "skill/rtl-shift-register-pattern/SKILL.md")
-                      .read_text(encoding="utf-8"))
 
     def test_dangerous_warning_filter_and_summary(self):
         log = ("WARNING: [VRFC 10-3705] select index 255 is out of bounds\n"
@@ -357,64 +352,33 @@ class SelfTestTests(unittest.TestCase):
 
 
 class SpecificationOracleTests(unittest.TestCase):
-    def test_galois_oracle_derives_width_taps_and_seed_from_spec(self):
-        for width, taps, seed, mask in ((5, "5 and 3", 1, "14"),
-                                         (7, "7 and 6", 3, "60")):
-            prompt = (f"A Galois LFSR shifts right. A tap is XORed with q[0]. "
-                      f"The module should implement a {width}-bit maximal-length "
-                      f"Galois LFSR with taps at bit positions {taps}. "
-                      f"The active-high synchronous reset should reset the LFSR "
-                      f"output to {seed}. Trigger on the positive edge of the clock.")
-            header = f"module TopModule(input clk,reset,output [{width-1}:0] q);"
-            contract = extract_contract(prompt, header, "TopModule")
-            test = from_spec(prompt, contract)
-            self.assertIsNotNone(test)
-            self.assertIn(f"^ {width}'h{mask}", test.declarations)
-            self.assertIn("old_state=%0h feedback=%0b taps=%0h", test.declarations)
-            self.assertIn(f"expected={width}'d{seed}", test.declarations)
-            self.assertIn("synchronous reset off-edge holds", test.stimulus)
-            for old, new in (("shifts right", "shifts left"),
-                             ("XORed", "XNORed"),
-                             ("positive edge", "negative edge"),
-                             (f"positions {taps}", "positions 99"),
-                             (f"positions {taps}", "positions 5 or 3"),
-                             (f"output to {seed}", "output to 1'b0"),
-                             (f"output to {seed}", "output to an unspecified seed")):
-                changed = prompt.replace(old, new)
-                self.assertIsNone(from_spec(changed, extract_contract(changed, header, "TopModule")))
+    def test_circuit_prose_has_no_prebuilt_algorithmic_checker(self):
+        cases = [
+            ('A "population count" circuit.',
+             "module TopModule(input [254:0] in,output [7:0] out);"),
+            ("Sign-extend the smaller number.",
+             "module TopModule(input [3:0] in,output [7:0] out);"),
+            ("A Galois LFSR shifts right. A tap is XORed with q[0]. "
+             "Implement a 5-bit maximal-length Galois LFSR with taps at bit positions 5 and 3. "
+             "The active-high synchronous reset should reset the LFSR output to 1. "
+             "Trigger on the positive edge of the clock.",
+             "module TopModule(input clk,reset,output [4:0] q);"),
+            ("Implement a gshare branch predictor with train_mispredicted. "
+             "Reset is asynchronous active-high. Training takes precedence. "
+             "A prediction sees the PHT state before training.",
+             "module TopModule(input clk,areset,predict_valid,input [6:0] predict_pc,"
+             "output predict_taken,output [6:0] predict_history,"
+             "input train_valid,train_taken,train_mispredicted,"
+             "input [6:0] train_history,train_pc);"),
+            ("Capture when input changes from 1 in one clock cycle to 0 the next. "
+             "The output will remain 1 until reset (active high synchronous reset).",
+             "module TopModule(input clk,reset,input [7:0] in,output [7:0] out);"),
+        ]
+        for prompt, interface in cases:
+            with self.subTest(prompt=prompt):
+                self.assertIsNone(from_spec(
+                    prompt, extract_contract(prompt, interface, "TopModule")))
 
-    def test_gshare_oracle_requires_exact_spec_shape_and_checks_concurrency(self):
-        prompt = ("Implement a gshare branch predictor with train_mispredicted. "
-                  "Reset is asynchronous active-high. "
-                  "If training takes precedence for a misprediction, recover history. "
-                  "A simultaneous prediction sees the PHT state before training.")
-        interface = ("module TopModule(input clk,areset,predict_valid,input [6:0] predict_pc, "
-                     "output predict_taken,output [6:0] predict_history, "
-                     "input train_valid,train_taken,train_mispredicted, "
-                     "input [6:0] train_history,train_pc);")
-        contract = extract_contract(prompt, interface, "TopModule")
-        test = from_spec(prompt, contract)
-        self.assertIsNotNone(test)
-        self.assertIn("old weak-not-taken counter", test.stimulus)
-        self.assertIn("Ordinary training must not block", test.stimulus)
-        self.assertIn("overrides the younger", test.stimulus)
-        self.assertIn("reset counter encoding is not assumed", test.uncertainties)
-        self.assertIn("history_before=%0h pc=%0h index=%0d", test.declarations)
-        self.assertIn("mispred=%0b", test.declarations)
-        self.assertIn("taken=%0b train_history=%0h", test.declarations)
-        wrong_shape = extract_contract(
-            prompt, interface.replace("[6:0] train_history", "[5:0] train_history"),
-            "TopModule")
-        self.assertIsNone(from_spec(prompt, wrong_shape))
-
-    def test_population_count_is_independent_and_covers_top_bit(self):
-        interface = "module TopModule(input [254:0] in, output [7:0] out);"
-        contract = extract_contract('A "population count" circuit.', interface, "TopModule")
-        test = from_spec('A "population count" circuit.', contract)
-        self.assertIn("j<255", test.stimulus)
-        self.assertIn("i<321", test.stimulus)
-        self.assertIn("expected=expected+in[j]", test.stimulus)
-        self.assertIsNone(from_spec("An unspecified combinational block.", contract))
 
     def test_kmap_keeps_actual_column_order_and_skips_dont_cares(self):
         prompt = """Karnaugh map
@@ -442,9 +406,9 @@ cd  01 00 10 11
         test = from_spec(prompt, extract_contract(prompt, interface, "TopModule"))
         self.assertEqual(test.stimulus.count("check("), 4)
         self.assertIn('check(p, 1\'d1, 1\'h1, "waveform 15ns p")', test.stimulus)
-        self.assertIn("p changes while clock stays 1", test.uncertainties)
+        self.assertEqual(test.uncertainties, "")
 
-    def test_waveform_primitive_hypotheses_check_every_defined_row(self):
+    def test_waveform_replay_does_not_supply_implementation_hypotheses(self):
         prompt = """time clock a p q
 0ns 0 0 x x
 5ns 1 0 0 x
@@ -458,9 +422,10 @@ cd  01 00 10 11
 """
         interface = "module TopModule(input clock,a, output p,q);"
         test = from_spec(prompt, extract_contract(prompt, interface, "TopModule"))
-        self.assertIn("p as a HIGH-transparent latch of a", test.uncertainties)
-        self.assertIn("q sampling p on negedge clock", test.uncertainties)
-        self.assertNotIn("q as a HIGH-transparent latch", test.uncertainties)
+        self.assertEqual(test.uncertainties, "")
+        self.assertNotIn("always", test.stimulus)
+        self.assertNotIn("negedge", test.stimulus)
+        self.assertEqual(test.stimulus.count("check("), 12)
 
     def test_moore_oracle_uses_prompt_transition_table(self):
         prompt = """The reset state is B and reset is active-high synchronous.
@@ -474,15 +439,6 @@ A (out=0) --in=1--> A
         self.assertIn("synchronous reset off-edge holds", test.stimulus)
         self.assertIn("Moore pre-edge", test.stimulus)
         self.assertIn("0: ref_state=in ? 0 : 1;", test.stimulus)
-
-    def test_sticky_capture_keeps_sampling_during_reset(self):
-        prompt = ("Capture when input changes from 1 in one clock cycle to 0 the next. "
-                  "The output will remain 1 until reset (active high synchronous reset).")
-        interface = "module TopModule(input clk,reset,input [7:0] in,output [7:0] out);"
-        test = from_spec(prompt, extract_contract(prompt, interface, "TopModule"))
-        self.assertIn("previous=in;", test.declarations)
-        self.assertIn("if(reset) expected='0;", test.declarations)
-        self.assertIn("in='1; sample_edge;\nreset=0; in='0; sample_edge;", test.stimulus)
 
 
 class AgentLoopTests(unittest.TestCase):

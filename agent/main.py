@@ -140,7 +140,6 @@ def solve_agent(llm: LLM, trace: Trace, prompt: str, interface: str, top: str,
     checker_attempts = 1 if selftest else 0
     checker_error = ""
     checker_response = json.dumps(selftest.__dict__) if selftest else ""
-    oracle_notes = selftest.uncertainties if selftest else ""
     if selftest:
         rtl.record("selftest.json", checker_response)
         trace.write(tool="selftest", event="generated", source="spec_parser",
@@ -200,9 +199,7 @@ def solve_agent(llm: LLM, trace: Trace, prompt: str, interface: str, top: str,
             break
 
         messages = [{"role": "system", "content": system + "\n\n"
-                     + contract.instructions() + (
-                         "\nSpecification observations (verify against original): "
-                         + oracle_notes if oracle_notes else "")}]
+                     + contract.instructions()}]
 
         # Skills can be relevant before any tool has run.  Matching the task
         # statement here lets timing/reset skills shape the first RTL draft;

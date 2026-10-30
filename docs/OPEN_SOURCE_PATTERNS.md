@@ -48,8 +48,9 @@ checker 有效率与官方通过率应在对应提交的服务器批次中验证
 明确不支持 typedef/enum/struct/class 等自定义类型，使用内建 reg/integer/localparam
 参考模型；stimulus 内 foreach、局部常量等也拒绝，常量移到 declarations 字段。
 packed width 中的嵌套索引用平衡括号处理；字符串/注释之外的 escaped identifier 拒绝。
-这是一种受限语法边界，不声称实现完整 SystemVerilog 作用域分析；程序化 oracle
-使用可信代码生成路径，不依赖模型 checker 的受限声明解析。
+这是一种受限语法边界，不声称实现完整 SystemVerilog 作用域分析。清理后的程序化
+路径仅逐行转换当前题面的显式表格/波形，不再包含按电路类型预置的算法参考模型；
+模型生成的 checker 仍须通过上述受限声明解析及独立复核。
 
 ## 生成器的错误反馈
 

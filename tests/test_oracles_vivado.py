@@ -1,4 +1,4 @@
-"""Optional real-tool integration tests with hand-derived, public specifications."""
+"""Optional tool tests for literal specification tables and the generic checker harness."""
 
 import unittest
 
@@ -24,12 +24,6 @@ class VivadoOracleTests(unittest.TestCase):
             rc, log = self.rtl.simulate(header + ";\n" + body + "\nendmodule\n", tb, 90)
             self.assertEqual(rc, expected, log)
 
-    def test_population_count(self):
-        self.compare('A "population count" circuit.',
-                     "module TopModule(input [14:0] in, output reg [3:0] out)",
-                     "integer i; always @* begin out=0; for(i=0;i<15;i=i+1) out=out+in[i]; end",
-                     "always @* out=0;")
-
     def test_stimulus_local_declaration_after_controller_initialization(self):
         header = "module TopModule(input a,b,output q);"
         contract = extract_contract("q is a AND b", header, "TopModule")
@@ -46,77 +40,6 @@ end
                     header + f" assign q={expression}; endmodule",
                     checker.render(contract), 90)
                 self.assertEqual(rc, expected, log)
-
-    def test_galois_rejects_fibonacci_feedback(self):
-        self.compare("""A Galois LFSR shifts right. A tap is XORed with q[0].
-The module should implement a 5-bit maximal-length Galois LFSR with taps
-at bit positions 5 and 3. The active-high synchronous reset should reset
-the LFSR output to 1. Trigger on the positive edge of the clock.
-""", "module TopModule(input clk,reset,output reg [4:0] q)",
-                     "always @(posedge clk) if(reset) q<=1; "
-                     "else q<=(q>>1) ^ (q[0] ? 5'h14 : 5'h00);",
-                     "always @(posedge clk) if(reset) q<=1; "
-                     "else q<={q[0]^q[2],q[4:1]};")
-
-    def test_gshare_lookup_timing_and_training_priority(self):
-        self.compare("""A gshare branch predictor with train_mispredicted.
-Reset is asynchronous active-high. If training takes precedence for a misprediction,
-recover history. A simultaneous prediction sees the PHT state before training.
-""", """module TopModule(input clk,areset,predict_valid,input [6:0] predict_pc,
-output reg predict_taken,output reg [6:0] predict_history,input train_valid,train_taken,
-train_mispredicted,input [6:0] train_history,train_pc)""",
-                     """
-reg [6:0] history;
-reg [1:0] pht[0:127];
-integer k;
-wire [6:0] pi=predict_pc ^ history;
-wire [6:0] ti=train_pc ^ train_history;
-always @* begin predict_taken=pht[pi][1]; predict_history=history; end
-always @(posedge clk or posedge areset) begin
-  if(areset) begin
-    history<=0;
-    for(k=0;k<128;k=k+1) pht[k]<=2'b01;
-  end else begin
-    if(train_valid) begin
-      if(train_taken && pht[ti]!=3) pht[ti]<=pht[ti]+1'b1;
-      else if(!train_taken && pht[ti]!=0) pht[ti]<=pht[ti]-1'b1;
-    end
-    if(train_valid && train_mispredicted)
-      history<={train_history[5:0],train_taken};
-    else if(predict_valid)
-      history<={history[5:0],predict_taken};
-  end
-end
-""", """
-reg [6:0] history;
-reg [1:0] pht[0:127];
-integer k;
-wire [6:0] pi=predict_pc ^ history;
-wire [6:0] ti=train_pc ^ train_history;
-always @(posedge clk or posedge areset) begin
-  if(areset) begin
-    history<=0; predict_taken<=0; predict_history<=0;
-    for(k=0;k<128;k=k+1) pht[k]<=2'b01;
-  end else begin
-    if(predict_valid) begin
-      predict_taken<=pht[pi][1]; predict_history<=history;
-    end
-    if(train_valid) begin
-      if(train_taken && pht[ti]!=3) pht[ti]<=pht[ti]+1'b1;
-      else if(!train_taken && pht[ti]!=0) pht[ti]<=pht[ti]-1'b1;
-    end
-    if(train_valid && train_mispredicted)
-      history<={train_history[5:0],train_taken};
-    else if(predict_valid)
-      history<={history[5:0],predict_taken};
-  end
-end
-""")
-
-    def test_sign_extension(self):
-        self.compare("Sign-extend the smaller number.",
-                     "module TopModule(input [3:0] in, output [7:0] out)",
-                     "assign out={{4{in[3]}},in};", "assign out={4'b0,in};")
 
     def test_kmap(self):
         self.compare("""Karnaugh map
@@ -140,17 +63,6 @@ A (out=0) --in=1--> A
                      "else if(!in) state<=~state; assign out=state;",
                      "reg state,q; always @(posedge clk) begin if(reset) state<=1; "
                      "else if(!in) state<=~state; q<=state; end assign out=q;")
-
-    def test_sticky_capture(self):
-        prompt = ("Capture when input changes from 1 in one clock cycle to 0 the next. "
-                  "The output will remain 1 until reset (active high synchronous reset).")
-        header = "module TopModule(input clk,reset,input [7:0] in,output reg [7:0] out)"
-        self.compare(prompt, header,
-                     "reg [7:0] prev; always @(posedge clk) begin prev<=in; "
-                     "if(reset) out<=0; else out<=out|(prev&~in); end",
-                     "reg [7:0] prev; always @(posedge clk) begin if(reset) "
-                     "begin prev<=0; out<=0; end else begin prev<=in; "
-                     "out<=out|(prev&~in); end end")
 
     def test_combinational_state_table(self):
         self.compare("""Implement the output logic and next state logic for an FSM.
