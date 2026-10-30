@@ -255,8 +255,7 @@ task step;
             $sformatf("prediction history_before=%0h pc=%0h index=%0d",
                       history_before,predict_pc,lookup_index));
       check(predict_history, ref_history, 7'h7f,
-            $sformatf("history before=%0h predict=%0b train=%0b mispred=%0b "
-                      "taken=%0b train_history=%0h train_pc=%0h",
+            $sformatf("history before=%0h predict=%0b train=%0b mispred=%0b taken=%0b train_history=%0h train_pc=%0h",
                       history_before,predict_valid,train_valid,
                       train_mispredicted,train_taken,train_history,train_pc));
     end
