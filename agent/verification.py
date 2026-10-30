@@ -90,6 +90,59 @@ endmodule
 """
 
 
+def _stimulus_declarations(text: str):
+    """Read names from ordinary variable declarations, not initializer arguments."""
+    inspected = re.sub(r'"(?:\\.|[^"\\])*"', '""', strip_comments(text))
+    # Keep procedural declarations in a small, auditable subset. Type aliases,
+    # enum constants and implicit foreach indices need a full SV scope parser;
+    # reject them instead of missing a shadowed DUT port.
+    unsupported = re.search(
+        r"\b(?:typedef|enum|struct|union|foreach|parameter|localparam|let|var|type)\b",
+        inspected)
+    if unsupported:
+        raise ValueError("unsupported declaration or loop in stimulus: "
+                         + unsupported.group() + "; use ordinary variables and for loops, "
+                         "and put helper types/constants in declarations")
+    for declaration in re.finditer(
+            r"\b(?:reg|wire|logic|bit|byte|shortint|int|longint|integer|time|real|realtime"
+            r"|shortreal|string|chandle|event)"
+            r"\b\s*([^;]+);",
+            inspected, re.S):
+        declarators = declaration.group(1).lstrip()
+        # Packed widths may themselves contain selects, e.g. $bits(ref[0]).
+        # Skip balanced dimensions rather than losing the declaration name.
+        while declarators:
+            qualifier = re.match(r"(?:signed|unsigned)\b\s*", declarators)
+            if qualifier:
+                declarators = declarators[qualifier.end():].lstrip()
+            elif declarators.startswith("["):
+                depth = 0
+                for end, char in enumerate(declarators):
+                    depth += (char == "[") - (char == "]")
+                    if depth == 0:
+                        declarators = declarators[end + 1:].lstrip()
+                        break
+                else:
+                    raise ValueError("unsupported declaration or loop: unclosed packed width")
+            else:
+                break
+        depth, start = 0, 0
+        parts = []
+        for index, char in enumerate(declarators):
+            if char in "([{":
+                depth += 1
+            elif char in ")]}":
+                depth -= 1
+            elif char == "," and depth == 0:
+                parts.append(declarators[start:index])
+                start = index + 1
+        parts.append(declarators[start:])
+        for part in parts:
+            name = re.match(r"\s*([A-Za-z_]\w*)", part)
+            if name:
+                yield name.group(1)
+
+
 def parse_selftest(text: str, contract: Contract) -> SelfTest:
     text = strip_think(text).strip()
     fenced = re.fullmatch(r"```(?:json)?\s*\n(.*?)```\s*", text, re.S)
@@ -108,10 +161,18 @@ def parse_selftest(text: str, contract: Contract) -> SelfTest:
                  r"|\$(?!signed\b|unsigned\b|clog2\b|bits\b|random\b|urandom\b"
                  r"|urandom_range\b|sformatf\b)[A-Za-z_]\w*|`")
     inspected = re.sub(r'"(?:\\.|[^"\\])*"', '""', strip_comments(code))
+    if "\\" in inspected:
+        raise ValueError("unsupported declaration or loop: escaped identifiers")
     match = re.search(forbidden, inspected)
     if match:
         raise ValueError("self-test contains forbidden control or DUT introspection: "
                          + match.group(0))
+    unsupported_type = re.search(
+        r"\b(?:typedef|enum|struct|union|class|endclass|nettype)\b", inspected)
+    if unsupported_type:
+        raise ValueError("unsupported declaration or loop in checker: "
+                         + unsupported_type.group() + "; use reg/integer/localparam "
+                         "reference models without custom types")
     # Class-only qualifiers are invalid on module-scope helper routines. Reject
     # them before spending another model call on review or launching Vivado.
     if re.search(r"\b(?:local|protected|virtual)\s+"
@@ -124,6 +185,10 @@ def parse_selftest(text: str, contract: Contract) -> SelfTest:
         r"\bfunction\b.*?\bendfunction\b|\btask\b.*?\bendtask\b",
         test.declarations, re.S)]
     port_widths = {n: w for _, w, n in contract.ports}
+    shadowed = port_widths.keys() & set(_stimulus_declarations(test.stimulus))
+    if shadowed:
+        raise ValueError("stimulus local declaration shadows a DUT port: "
+                         + ", ".join(sorted(shadowed)))
     edits = []
     for match in re.finditer(r"\b(?:reg|wire|logic)\s+"
                              r"(\[\s*(\d+)\s*:\s*(\d+)\s*\]\s*)?"
@@ -174,12 +239,15 @@ zero, output wires, the DUT instance, a watchdog and a comparison task:
 All vector arguments are zero-extended to at least 1024 bits. Use explicitly sized
 masks for the output bits being compared. Each call must check at least one bit.
 declarations: reference variables, localparams and helper tasks/functions only.
+Use built-in reg/integer types and localparams, not typedef/enum/struct/classes.
 Helpers are module scoped, not class methods: use task automatic tick; begin
 #1; end endtask. Never use local/protected/virtual task or function qualifiers.
 End a standalone delay with a semicolon: #1; before end/endtask/endfunction.
 NEVER redeclare the input/output ports; their exact names and widths are in the
 parsed contract. Declare all helper variables here, not halfway through a block.
 stimulus: statements INSIDE an existing initial begin/end; no initial/module.
+Local ordinary variables must not shadow DUT ports. Put constants in declarations;
+use explicit for loops, not foreach or custom types.
 Use # delays and explicit clock assignments; do not generate an always clock.
 Drive away from the sampling edge, sample after #1 for settled NBA values.
 Never call $display/$finish/$fatal/$stop or access dut or agent_* names.

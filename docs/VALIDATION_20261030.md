@@ -112,3 +112,7 @@ Windows 本地为 Ran 69、OK、skipped=10。服务器 20 道新题继续使用�
 进一步根据多题复核日志，将完整重写式审核改为严格短 verdict、冻结原 checker，
 拒绝则走独立重建；来源、实验依据及限制详见 `OPEN_SOURCE_PATTERNS.md`。
 本地对应回归为 Ran 74、OK、skipped=10；其服务器验证及真实模型结果待对应批次记录。
+
+作用域复核又补充了 stimulus 局部声明不能遮蔽 DUT 端口的检查，同时拒绝超出受限声明
+解析范围的 typedef/enum/foreach 等形式；不把被遮蔽的本地值当作 DUT 输出。包含函数
+调用/拼接初始化的正常声明仍可解析。本地为 Ran 76、OK、skipped=10；远端另行验证。

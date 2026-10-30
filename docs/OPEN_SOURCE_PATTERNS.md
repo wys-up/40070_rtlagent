@@ -39,3 +39,14 @@ checker 有效率与官方通过率应在对应提交的服务器批次中验证
 
 本轮没有增加插件系统、凭据管理、外部检索、多模型路由等与 RTL 比赛无关的功能。
 独立 stub 的 checker 预编译是后续候选方向，其工具成本和收益尚未实测，未纳入本次实现。
+
+## stimulus 作用域复核
+
+独立刺激块使局部变量声明合法，同时也需要防止局部变量遮蔽控制器 DUT 端口。
+解析器拒绝与端口同名的普通变量声明，覆盖嵌套块及 for 初始化；按括号/索引/拼接深度
+识别声明分隔符，避免把初始化函数参数中的输入名误认成新声明。模型 checker 全体
+明确不支持 typedef/enum/struct/class 等自定义类型，使用内建 reg/integer/localparam
+参考模型；stimulus 内 foreach、局部常量等也拒绝，常量移到 declarations 字段。
+packed width 中的嵌套索引用平衡括号处理；字符串/注释之外的 escaped identifier 拒绝。
+这是一种受限语法边界，不声称实现完整 SystemVerilog 作用域分析；程序化 oracle
+使用可信代码生成路径，不依赖模型 checker 的受限声明解析。

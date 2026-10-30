@@ -240,6 +240,33 @@ class SelfTestTests(unittest.TestCase):
             'a=1; b=1; settle(); check(q,1,1,"local task is only a label");')
         parse_selftest(json.dumps(data), self.contract)
 
+    def test_stimulus_locals_cannot_shadow_controller_ports(self):
+        for declaration in ("reg q;", "logic signed [3:0] q;", "integer i,q;",
+                            "integer a;", "string q;",
+                            "for(int b=0;b<2;b=b+1) begin end",
+                            "localparam q=0;", "typedef int counter_t; counter_t q;",
+                            "enum {q=0} counter;", "foreach(data[q]) begin end",
+                            "reg [1:0] ref_bits; logic [$bits(ref_bits[0])-1:0] q;",
+                            "logic \\q ;"):
+            with self.subTest(declaration=declaration), self.assertRaisesRegex(
+                    ValueError, "shadows a DUT port|unsupported declaration or loop"):
+                data = dict(TEST.__dict__)
+                data["stimulus"] = declaration + "\n" + TEST.stimulus
+                parse_selftest(json.dumps(data), self.contract)
+
+    def test_stimulus_initializer_arguments_are_not_declaration_names(self):
+        data = dict(TEST.__dict__)
+        data["declarations"] = (
+            "function integer sum; input x,y; begin sum=x+y; end endfunction")
+        data["stimulus"] = (
+            "integer i=sum(a,b), j; reg [1:0] pair={a,b};\n"
+            "reg [$bits(pair[0])-1:0] saved;\n" + TEST.stimulus)
+        parse_selftest(json.dumps(data), self.contract)
+        data["declarations"] = "typedef integer count_t;"
+        data["stimulus"] = 'count_t q; q=0; check(q,0,1,"aliased shadow");'
+        with self.assertRaisesRegex(ValueError, "unsupported declaration or loop"):
+            parse_selftest(json.dumps(data), self.contract)
+
     def test_simulator_requires_positive_completed_verdict(self):
         rtl = tools.RtlToolchain()
         rtl.xvlog, rtl.xelab, rtl.xsim = "xvlog", "xelab", "xsim"
