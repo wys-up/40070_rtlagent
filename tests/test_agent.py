@@ -488,7 +488,8 @@ A (out=0) --in=1--> A
 class AgentLoopTests(unittest.TestCase):
     def run_agent(self, responses, simulations, checker=TEST):
         llm = Mock(backend="openai")
-        llm.chat.side_effect = [LLMResult("```verilog\n" + c + "```") for c in responses]
+        llm.chat.side_effect = [LLMResult("```verilog\n" + c + "```")
+                               if isinstance(c, str) else c for c in responses]
         rtl = Mock(available=True, simulation_available=True, reason="")
         rtl.lint.return_value = (0, "compiled")
         rtl.synth.return_value = (0, "Synthesis finished")
@@ -508,6 +509,52 @@ class AgentLoopTests(unittest.TestCase):
             events = [json.loads(s) for s in Path(trace.path).read_text(
                 encoding="utf-8").splitlines()]
         return answer, saved, events, llm, rtl
+
+    def test_failed_rtl_request_is_timed_without_response_token_usage(self):
+        answer, _, events, _, _ = self.run_agent(
+            [LLMError("model request failed: ReadTimeout"), GOOD],
+            [(0, "AGENT_SELFTEST_PASS checks=4")])
+        self.assertEqual(answer, GOOD)
+        errors = [e for e in events if e.get("tool") == "llm"
+                  and e.get("event") == "error"]
+        self.assertEqual(len(errors), 1)
+        self.assertGreaterEqual(errors[0]["elapsed_s"], 0)
+        self.assertNotIn("tokens_out", errors[0])
+
+    def test_checker_request_errors_keep_phase_and_recover_independently(self):
+        for phase in ("selftest", "selftest_review"):
+            with self.subTest(phase=phase):
+                llm = Mock(backend="openai")
+                tail = [LLMResult(json.dumps(TEST.__dict__)),
+                        LLMResult('{"approved":true,"issues":[]}')]
+                first = [LLMResult(json.dumps(TEST.__dict__))]
+                llm.chat.side_effect = (
+                    [LLMResult("```verilog\n" + GOOD + "```")]
+                    + (first if phase == "selftest_review" else [])
+                    + [LLMError("model request failed: ReadTimeout")] + tail)
+                rtl = Mock(available=True, simulation_available=True, reason="")
+                rtl.lint.return_value = (0, "compiled")
+                rtl.synth.return_value = (0, "Synthesis finished")
+                rtl.simulate.return_value = (0, "AGENT_SELFTEST_PASS checks=2")
+                with tempfile.TemporaryDirectory() as tmp:
+                    trace = main.Trace(os.path.join(tmp, "trace.jsonl"))
+                    try:
+                        with patch.object(main, "RtlToolchain", return_value=rtl), \
+                                patch.object(main, "MAX_ROUNDS", 1):
+                            answer = main.solve_agent(llm, trace, "q is a AND b",
+                                                      INTERFACE, "TopModule")
+                    finally:
+                        trace.close()
+                    events = [json.loads(s) for s in Path(trace.path).read_text(
+                        encoding="utf8").splitlines()]
+                self.assertEqual(answer, GOOD)
+                rtl.simulate.assert_called_once()
+                errors = [e for e in events if e.get("tool") == "llm"
+                          and e.get("event") == "error"]
+                self.assertEqual(len(errors), 1)
+                self.assertEqual(errors[0]["purpose"], phase)
+                self.assertGreaterEqual(errors[0]["elapsed_s"], 0)
+                self.assertNotIn("tokens_out", errors[0])
 
     def test_functional_failure_is_repaired_with_counterexample(self):
         answer, saved, events, llm, rtl = self.run_agent(

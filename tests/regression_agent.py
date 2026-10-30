@@ -66,7 +66,11 @@ def summarize_trace(path):
                 errors.append(f"line {line_no}: {exc}")
     except OSError as exc:
         errors.append(str(exc))
-    calls = [e for e in events if e.get("tool") == "llm" and "elapsed_s" in e]
+    calls = [e for e in events if e.get("tool") == "llm" and "elapsed_s" in e
+             and not e.get("rc") and e.get("event") != "error"]
+    failed_calls = [e for e in events if e.get("tool") == "llm"
+                    and (e.get("rc") or e.get("event") == "error")]
+    timed_failures = [e for e in failed_calls if "elapsed_s" in e]
     start = next((e for e in events if e.get("event") == "start"
                   and e.get("tool") == "agent"), {})
     return dict(accepted=any(e.get("event") == "accept" for e in events),
@@ -74,6 +78,11 @@ def summarize_trace(path):
                 model=start.get("llm"), errors=errors, events=len(events),
                 llm_calls=len(calls),
                 llm_wall_s=round(sum(e["elapsed_s"] for e in calls), 3),
+                llm_failed_calls=len(failed_calls),
+                llm_timed_failures=len(timed_failures),
+                llm_failed_wall_s=round(sum(e["elapsed_s"] for e in timed_failures), 3),
+                llm_recorded_wall_s=round(sum(e["elapsed_s"] for e in
+                                             calls + timed_failures), 3),
                 llm_purposes=dict(Counter(e.get("purpose", "rtl") for e in calls)),
                 checker_invalid=sum(e.get("tool") == "selftest" and
                                     e.get("event") == "invalid" for e in events),

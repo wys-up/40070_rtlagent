@@ -33,6 +33,20 @@ Git 保存代码与文档，不包含仓库外环境变量、模型权重或正�
 闹钟和预算使用 `time.monotonic()`，不会因系统墙钟校准而延长。
 trace 的 `ts` 仍使用 Unix 时间戳。
 
+### 模型调用耗时口径
+
+RTL 生成、checker 生成和 checker 复核的请求失败现在各写一条
+`tool=llm,event=error,rc=1`，使用单调时钟记录 `elapsed_s`；checker 同时标记
+`purpose` 和 `attempt`。失败不虚构 token 用量，也不冒充一条模型响应。
+checker 的 start 事件记录本次 timeout，成功响应保留 finish_reason。
+
+开发评测摘要保留原有 `llm_calls` / `llm_wall_s` 为成功返回请求的次数/耗时；
+新增 `llm_failed_calls`、`llm_timed_failures`、`llm_failed_wall_s`，以及成功与
+已记录失败等待相加的 `llm_recorded_wall_s`。它们均不能代替 `agent.wall_s`。
+旧日志的部分 checker 超时只出现在 selftest.invalid，无法从新增字段补出耗时；
+进程被硬中止而没有终结事件的调用也不完整。因此不将旧批次重新估算成精确模型总耗时，
+agent 与独立 judge 的墙钟仍分别记录。
+
 240 秒等单次上限用于限制请求等待；HTTP 库的读取超时不等于严格的整段传输墙钟上限。
 Linux agent 的总时间闹钟与服务端独立进程监督共同约束整题。
 磁盘卡死、内核不可中断等待和网络中断仍可能越过预算，不能承诺任何故障下均有有效得分。

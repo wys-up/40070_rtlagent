@@ -51,6 +51,24 @@ class RegressionHarnessTests(unittest.TestCase):
             self.assertEqual(summary["events"], 1)
             self.assertEqual(len(summary["errors"]), 1)
 
+    def test_failed_request_wait_is_separate_from_completed_model_usage(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            trace = Path(temporary) / "trace.jsonl"
+            events = [dict(tool="llm", purpose="rtl", elapsed_s=2.5),
+                      dict(tool="llm", purpose="selftest", event="start"),
+                      dict(tool="llm", purpose="selftest", event="error", rc=1,
+                           elapsed_s=60, excerpt="model request failed: ReadTimeout"),
+                      dict(tool="llm", rc=1, excerpt="legacy untimed failure")]
+            trace.write_text("\n".join(json.dumps(e) for e in events), encoding="utf8")
+            summary = evaluation.summarize_trace(trace)
+            self.assertEqual(summary["llm_calls"], 1)
+            self.assertEqual(summary["llm_wall_s"], 2.5)
+            self.assertEqual(summary["llm_failed_calls"], 2)
+            self.assertEqual(summary["llm_timed_failures"], 1)
+            self.assertEqual(summary["llm_failed_wall_s"], 60)
+            self.assertEqual(summary["llm_recorded_wall_s"], 62.5)
+            self.assertEqual(summary["llm_purposes"], {"rtl": 1})
+
     def test_source_hashes_ignore_python_bytecode(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

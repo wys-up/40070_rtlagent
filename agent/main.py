@@ -181,13 +181,13 @@ def solve_agent(llm: LLM, trace: Trace, prompt: str, interface: str, top: str,
         rtl.record(f"selftest-response-{checker_attempts}.txt", result.text)
         trace.write(tool="llm", purpose="selftest", attempt=checker_attempts,
                     tokens_in=result.tokens_in, tokens_out=result.tokens_out,
-                    elapsed_s=round(elapsed, 2))
+                    elapsed_s=round(elapsed, 2), finish_reason=result.finish_reason)
 
     def record_review(result, elapsed) -> None:
         rtl.record(f"selftest-review-{checker_attempts}.txt", result.text)
         trace.write(tool="llm", purpose="selftest_review", attempt=checker_attempts,
                     tokens_in=result.tokens_in, tokens_out=result.tokens_out,
-                    elapsed_s=round(elapsed, 2))
+                    elapsed_s=round(elapsed, 2), finish_reason=result.finish_reason)
 
     for rnd in range(1, MAX_ROUNDS + 1):
         rtl.round = rnd
@@ -239,7 +239,7 @@ def solve_agent(llm: LLM, trace: Trace, prompt: str, interface: str, top: str,
 
         messages.append({"role": "user", "content": user})
 
-        t0 = time.time()
+        t0 = time.monotonic()
         left = remaining()
         generation_s = min(
             GENERATION_S, max(0, left - min(VALIDATION_RESERVE_S, left * 0.35)))
@@ -250,14 +250,16 @@ def solve_agent(llm: LLM, trace: Trace, prompt: str, interface: str, top: str,
         try:
             result = llm.chat(messages, timeout_s=generation_s)
         except LLMError as exc:
-            trace.write(tool="llm", round=rnd, rc=1, excerpt=str(exc)[:500])
+            trace.write(tool="llm", round=rnd, event="error", rc=1,
+                        elapsed_s=round(time.monotonic() - t0, 2),
+                        excerpt=str(exc)[:500])
             if best:
                 break
             continue
         trace.write(
             tool="llm", round=rnd,
             tokens_in=result.tokens_in, tokens_out=result.tokens_out,
-            elapsed_s=round(time.time() - t0, 2),
+            elapsed_s=round(time.monotonic() - t0, 2),
             finish_reason=result.finish_reason,
         )
         rtl.record("model-response.txt", result.text)
@@ -359,13 +361,17 @@ def solve_agent(llm: LLM, trace: Trace, prompt: str, interface: str, top: str,
                 if checker_attempts >= 3:
                     break
                 checker_attempts += 1
+                checker_phase = "selftest"
+                request_started = time.monotonic()
                 try:
+                    request_budget = min(remaining(), CHECKER_S,
+                                         checker_deadline - time.monotonic())
                     trace.write(tool="llm", purpose="selftest", event="start",
-                                attempt=checker_attempts)
+                                attempt=checker_attempts,
+                                timeout_s=round(request_budget, 3))
                     selftest = generate_selftest(
                         llm, prompt, interface, contract,
-                        timeout_s=min(remaining(), CHECKER_S,
-                                      checker_deadline - time.monotonic()),
+                        timeout_s=request_budget,
                         previous_error=checker_error,
                         previous_response=checker_response,
                         record=record_checker)
@@ -375,8 +381,11 @@ def solve_agent(llm: LLM, trace: Trace, prompt: str, interface: str, top: str,
                         raise ValueError("checker budget exhausted before review")
                     frozen_checker = json.dumps(selftest.__dict__, sort_keys=True)
                     checker_sha256 = hashlib.sha256(frozen_checker.encode()).hexdigest()
+                    checker_phase = "selftest_review"
+                    request_started = time.monotonic()
                     trace.write(tool="llm", purpose="selftest_review", event="start",
                                 attempt=checker_attempts,
+                                timeout_s=round(review_budget, 3),
                                 checker_sha256=checker_sha256)
                     reviewed = review_selftest(
                         llm, prompt, interface, contract, selftest,
@@ -392,6 +401,11 @@ def solve_agent(llm: LLM, trace: Trace, prompt: str, interface: str, top: str,
                                 attempt=checker_attempts, coverage=selftest.coverage,
                                 uncertainties=selftest.uncertainties)
                 except (LLMError, ValueError) as exc:
+                    if isinstance(exc, LLMError):
+                        trace.write(tool="llm", purpose=checker_phase, event="error",
+                                    attempt=checker_attempts, rc=1,
+                                    elapsed_s=round(time.monotonic() - request_started, 2),
+                                    excerpt=str(exc)[:500])
                     selftest = None
                     checker_error = str(exc)
                     trace.write(tool="selftest", event="invalid",
