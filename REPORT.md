@@ -94,7 +94,8 @@ Vivado 日志直接占满上下文。
 ### 4.4 自我验证
 
 控制器根据题面构造 DUT 例化、比较任务、计数器和 watchdog。对可识别的 population
-count、符号扩展、K-map、组合状态表、Moore 表、sticky 下降沿捕获和波形表使用程序化
+count、符号扩展、K-map、组合状态表、Moore 表、sticky 下降沿捕获、明确规格的右移
+Galois LFSR、gshare 和波形表使用程序化
 检查器；其它题目由同一模型生成检查器后再复核。模型检查器错误与 DUT 功能错误分开
 记录，不能仅凭编译或综合通过接受候选。
 
@@ -119,7 +120,25 @@ LFSR 方程（`e5818e6`、`bdfe193`），FSM 输出周期与 PHT 全表初始化
 
 ## 6. 实测结果
 
-### 6.1 环境与范围
+### 6.1 当前最终包的验证
+
+最终包源码快照 `3369812` 在服务器隔离目录
+`/workspace/40070_rtlagent_validation_20261030-r11` 完成 76 项 unittest，全部通过，
+无跳过，耗时 149.603 秒；其中包括 9 项真实 Vivado/xsim 集成测试。Windows 同一
+测试命令为 Ran 67、OK、skipped=10，因 Linux 能力和 Vivado 缺失而跳过的条目不能
+替代服务器验证。
+
+该快照已完成重点三题与扩展九题，共 12 道不同题的顺序模型生成及独立官方 judge：
+6 道 L3、6 道 L1。L3 为 Prob001、018、038、042、107、122；L1 为 Prob030、066、
+086、137、145、153。没有全题集或同批基线，不能把这个样本比例当成全量通过率、
+pass@k 或改进增益。Prob030、066 的旧版本历史通过不能算作当前通过。
+
+逐题失配数、源码与输出哈希、agent/judge 分开耗时、checker 超时和预算覆盖记录见
+`docs/VALIDATION_20261030.md` 及 `docs/validation_20261030.json`。官方通过与 agent
+自检接受分开统计：例如 Prob018、038 官方 L3，但 checker 未完成有效判定，agent
+只返回了可综合的保留候选。LFSR、串行及 gshare 的新增诊断没有使本批失败题通过。
+
+### 6.2 历史开发回归（不并入当前成绩）
 
 既有验证记录对应 AMD Radeon Pro W7900D 48 GiB，Vivado 2026.1，目标器件
 `xczu3eg-sbva484-1-e`，5 ns。服务器完整 unittest 为 46 项，其中包含 7 类 Vivado
@@ -147,11 +166,13 @@ oracle 集成测试；日志在 `outputs/agent-fix-20261026/unittest.log`。
 | Prob134_2014_q3c | L1 | L3 | 0/200 |
 | Prob145_circuit8 | L1 | L1 | 176/240 |
 
-### 6.2 代价
+### 6.3 代价与时间边界
 
-没有完成全题集墙钟汇总。已确认单题模型请求和 Vivado 工具均受剩余预算约束，服务
-启动只在 `serve/start.sh` 中等待就绪；正式评测应按同一 `run.sh`/`run_baseline.sh`
-口径重新记录平均和最长时间。
+没有完成全题集墙钟汇总。上述 12 题的 agent 耗时为 32.233–353.001 秒，不包含后续
+官方 judge；题目逐个执行，不能将 agent 与 judge 合计时间称作 agent 时间。
+重点批覆盖 deadline=600，扩展批为 agent 默认 900 秒、开发外层上限 635 秒；本批
+均早于外层上限正常退出。这不是正式 HTTP 900 秒链路或边界验收，详情见验证文档。
+正式评测仍需按相同 `run.sh`/`run_baseline.sh` 口径完成全量与基线对比。
 
 ## 7. 复现说明
 
@@ -191,7 +212,7 @@ export LLM_API_KEY=dummy
 source /workspace/rtlagent-config/agent.env
 bash selftest/run_selftest.sh --check
 bash selftest/run_selftest.sh --reference
-python3 -m unittest discover -s example/tests -v
+python3 -m unittest discover -s tests -v
 ```
 
 已完成 `--check` 所需工具核查和 reference 链路核查；完整全量方案/基线评测未完成。
@@ -217,7 +238,7 @@ python3 -m unittest discover -s example/tests -v
 | 做法 | 结果 | 原因 |
 | --- | --- | --- |
 | 只增加重试轮数 | 墙钟增加，功能错误基本不变 | 没有新的功能 oracle，模型会重复错误解释 |
-| 综合通过即接受 | 会误收 Prob030 等功能错误 | L3 只说明可综合，不能证明逐拍行为正确 |
+| 综合通过即接受 | 会误收 Prob030 等功能错误 | 综合本身不能证明逐拍正确；官方 L3 还要求功能仿真通过 |
 | 让 checker 读取候选 RTL 或官方参考 | 被禁止且会产生泄漏 | 正式自检只从 prompt/interface 构造 |
 
 ### 8.3 边界
@@ -228,7 +249,7 @@ python3 -m unittest discover -s example/tests -v
 
 ## 9. 大模型协作记录
 
-开发阶段使用 Codex（GPT-5 系列，Codex desktop）和远程终端工具协助阅读仓库、定位
+开发阶段使用 Codex desktop 和远程终端工具协助阅读仓库、定位
 失败、修改 agent/skill、核对模型服务配置和执行测试。运行时方案只使用本地
 Qwen2.5-Coder-32B-Instruct GGUF，不使用商用 API 或外部检索。
 
@@ -245,6 +266,7 @@ Prob030 功能错误；Prob145 的波形 checker 能拒绝错误候选但不能�
 
 ## 10. 版本与复核边界
 
-上述远程验证结果来自此前验证过的代码快照；本次移植的 prompt、路由和技能改动须以
-本包提交后的隔离复测结果为准。模型文件不提交到 Git。此前 Gitee 推送曾因 TLS/SSH
-公钥问题失败；最终封存前仍需在可访问的远端仓库完成推送并邀请赛事方协作者。
+当前最终包以第 6.1 节和验证文档中明确标识的源码快照为准；第 6.2 节与旧文档中的
+历史项目结果不代替本包复测。修改按逻辑分组提交，测试摘要随文档入库，模型权重及
+EDA 中间产物不提交到 Git。本 fork 的 GitHub origin 与最终赛事提交渠道应分别核验；
+赛事协作者邀请、正式封存和全量 agent/baseline 对比未在本轮完成。

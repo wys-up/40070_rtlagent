@@ -8,6 +8,7 @@
 - `run.sh <input_dir> <output_dir>`：运行智能体并生成 `solution.v`
 - `run_baseline.sh <input_dir> <output_dir>`：运行原版赛事基线
 - `REPORT.md`：设计报告
+- `docs/VALIDATION_20261030.md`：最终包分版本实测、逐题结果和剩余限制
 - `model/MODEL.md`：模型、权重和推理配置声明
 
 正式运行前需在断网环境中准备好模型权重、Python 依赖、Vivado 2026.1 和授权配置。

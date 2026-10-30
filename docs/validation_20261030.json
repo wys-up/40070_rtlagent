@@ -1,0 +1,1479 @@
+{
+  "schema_version": 1,
+  "exported_utc": "2026-10-30T07:02:28.139170+00:00",
+  "scope": "Development sample runs; not full-dataset accuracy, pass@k, or a comparison against a matched baseline. Repeated tasks across source revisions are separate runs.",
+  "timing": "agent.wall_s includes model and EDA tools; judge_process.wall_s is separate. trace.llm_calls/llm_wall_s count completed requests only and exclude ReadTimeout waits.",
+  "batches": [
+    {
+      "batch": "r11-broad-20261030",
+      "metadata": {
+        "started_utc": "2026-10-30T06:33:37.383758+00:00",
+        "source_revision": "3369812",
+        "agent_root": "/workspace/40070_rtlagent_validation_20261030-r11",
+        "task_root": "/workspace/rtlagent2026/tasks/veval_v2_clean/tasks",
+        "judge": "/workspace/rtlagent2026/selftest/judge.py",
+        "tasks": [
+          "Prob001_zero",
+          "Prob018_mux256to1",
+          "Prob030_popcount255",
+          "Prob038_count15",
+          "Prob042_vector4",
+          "Prob066_edgecapture",
+          "Prob107_fsm1s",
+          "Prob122_kmap4",
+          "Prob145_circuit8"
+        ],
+        "judge_sha256": "02238c62b598de5a835374b8dcbff9eebbeca7cd9fc01db8b5aad2d018882e10",
+        "source_sha256": {
+          "Dockerfile": "c0c6c462acf9845527ec8754540f04fa5217d8f6af2d8e8a9269dc1e13580c85",
+          "README.md": "dee4e6f44bad9398d07b892a9ae5d7a07c32e6a8e09df84149714cc2b887abe5",
+          "REPORT.md": "4148d5163e3711526e00813e4f70d769de57271c759109f3591057e52929b73b",
+          "agent/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "agent/llm.py": "227c736804933f43e9dac15eaac9e7d2ca393051a7b502c7f93808c16f2bf9c3",
+          "agent/main.py": "80d0e03ec1ac5f4561eb824b6592809b1b0909c9e12b2e6c0f25655ad4004136",
+          "agent/oracles.py": "bab5c459ac6075dd24687cbe46d1102c2d138781a65186e364180764b056c4f6",
+          "agent/prompts/repair.md": "0b2eb1509699531d309c89eb4330bbe214a7e4051eecd53a45aadb45cf546b92",
+          "agent/prompts/system.md": "9889b8dee3046a8571f716f46a2d4e5f1351783d1e894a72e31cac076f166d2e",
+          "agent/skills.py": "34f5ae8a33103aa937fa65dd3fec86bca51defdbf978eb2b692e678557d16eea",
+          "agent/spec_contract.py": "9b54bf3a1d00866ceefa0c899aa23f2f052bc2932030193469df8ccfc4d3c4fd",
+          "agent/tools.py": "8da36ee0139de15b2178133cfc20ce0a2adadf85d54d19475525ddefe79f36c3",
+          "agent/verification.py": "a6dd4cdf5e70bbe18967b2e5a056d99b74f01028119de35205dd29f46e886d22",
+          "baseline.py": "ae74edbba7f4647e5958307c4d1a962ec620a515f6644188c940d3ec658183bf",
+          "docs/API_CONTRACT.md": "f8d0881998ce7f9d8a2947934f9940180c5bfa24a2ead971e25b0b143db17044",
+          "docs/DEADLINE_FALLBACK.md": "27e3a356f0951390c995ce063bac6be21f89efd61257f8743c9e01c923ca85ca",
+          "docs/VALIDATION_20261030.md": "ab12a458453d7f5f4763a2d6c021b42fe3623879a35f60f75e70f4a1f2549020",
+          "manifest.json": "38d1de9cb734bc5fe283cb941b19d97db421a5878fc680bce17a8c8478547208",
+          "model/MODEL.md": "b8d351e033c4c7a2fd10e072de90ae5f589aaa682fa9d439ec2b74adfbe1a832",
+          "requirements.txt": "5a71c13f67505225c8f91c8702394b74b2aa0e92a4e8fe79d15f773aaf38afbd",
+          "run.sh": "b25e15b9186afe6b8e863107dbe71c667f1c36d25ab97ce92cc6598b9d27098e",
+          "run_baseline.sh": "5c46c40d32c0cf4c4e1dc52ae12e60f8396a0deccafaa4e6f69d7316a3482e75",
+          "serve/README.md": "641de485c3dad6983642c92db07e15ebd9383b6c3ae457742f5c05c5c7a84b31",
+          "serve/run_api.sh": "1345ad09df0617922ebe2db1f73583396a92bc366c6301f81c38b6b0402e2bce",
+          "serve/serve_api.py": "45e9e0f8c560267d4c6b3635f7382a0386bd48ba650ba194ad6582d879219b11",
+          "serve/start.sh": "c28d05ceba83c6c3e97001fbd475be95541b51aa17257d5b22e1eeca0b0af010",
+          "serve/vllm.sh": "42610f3c5984194342cf20c9c02cdf4c5cd523a603ebda56b37b38e9af54bb34",
+          "skill/README.md": "01ea0b9b189f115dd3870d477a8a57c37ff7168e20947f07d94b5b2de9d80fe6",
+          "skill/rtl-arithmetic-widths/SKILL.md": "01f42c0cd637d536292d93a85b55e46a75cf5350954c14ca29836c7c84389253",
+          "skill/rtl-branch-predictor/SKILL.md": "4909c34efe73323f32bd022b694ee6e5a421362b2ff102b297071edc13cd32f2",
+          "skill/rtl-fsm-output-timing/SKILL.md": "4c43ecf585d2ab32cefdb6dc3668f8d959612d7edae5329b8ff29227d750cf58",
+          "skill/rtl-module-interface-contract/SKILL.md": "2ed98c08a2a80b71fdd8c5b54dde00c548896ab485cd584be5ddeb33cb5da08a",
+          "skill/rtl-sequential-timing/SKILL.md": "a22387fbce3e5925bda7393ac23aa3b515f8745c1d9e9ce2dbae552e0e6675f9",
+          "skill/rtl-serial-receiver/SKILL.md": "8a369c2068124073f3106a8d8473a1592c3fe96f6d28c808ff1309da0b990c62",
+          "skill/rtl-shift-register-pattern/SKILL.md": "c2c1a031080a2f8cd2fb1f97236661664fef943c7d9d0131b6dfb3b8bd122953",
+          "tests/regression_agent.py": "ca53dcf4a17abfe9e5e296d6811b189d51e05a650194b82822f2ace1cb15204e",
+          "tests/test_agent.py": "ec597a3b061d0a9b508241b6f9c65d05759b461c15e3aa71d10522ef46379c74",
+          "tests/test_oracles_vivado.py": "d7994b0daafcdef5e396a703c070f67b474f3a91faee82b99728cd88f11677c7",
+          "tests/test_regression_agent.py": "52e534c39a941e31500ac2663d0696b84baf7631b72808fe0bb96865e2c955cc",
+          "tests/test_serve_api.py": "f384a5040832cd4dd2b6899aeb08bdb01677d5662587dc164965bf5e94fbab22"
+        },
+        "limits": {
+          "agent_s": 635,
+          "judge_s": 120
+        },
+        "timing": "sequential; agent includes model/tools; judge measured separately",
+        "environment": {
+          "AGENT_TMP": "/var/tmp",
+          "LLM_BACKEND": "openai",
+          "LLM_MODEL": "qwen2.5-coder-32b-instruct-q4_k_m.gguf"
+        }
+      },
+      "metadata_file_sha256": "fe5b634321c68bb43f64365d6cdc17b08b4accf2c895df2edce059cbd89c8f67",
+      "results_file_sha256": "c012dbe0a929bece0cff428046deb220a230e16f84ff93231fc4172d37f23864",
+      "complete": true,
+      "results": [
+        {
+          "task": "Prob001_zero",
+          "agent": {
+            "rc": 0,
+            "wall_s": 64.438,
+            "error": null
+          },
+          "judge_process": {
+            "rc": 0,
+            "wall_s": 28.607,
+            "error": null
+          },
+          "judge": {
+            "task_id": "Prob001_zero",
+            "top": "TopModule",
+            "level": 3,
+            "coefficient": 1.0,
+            "stages": {
+              "compile": true,
+              "simulate": true,
+              "synth": true
+            },
+            "tool_error": null,
+            "elapsed_s": 28.5,
+            "mismatches": 0,
+            "samples": 20
+          },
+          "total_wall_s": 93.046,
+          "solution_sha256": "28a73efc2ef045ebfae554427bb631151f369b21f00bebe82f182f46e735100b",
+          "trace": {
+            "accepted": true,
+            "rounds": 1,
+            "model": {
+              "backend": "openai",
+              "model": "qwen2.5-coder-32b-instruct-q4_k_m.gguf",
+              "base_url": "http://127.0.0.1:8000/v1",
+              "max_tokens": 16384,
+              "temperature": 0.2,
+              "generation": {
+                "chat_template_kwargs": {
+                  "enable_thinking": false
+                }
+              }
+            },
+            "errors": [],
+            "events": 23,
+            "llm_calls": 3,
+            "llm_wall_s": 35.77,
+            "llm_purposes": {
+              "rtl": 1,
+              "selftest": 1,
+              "selftest_review": 1
+            },
+            "checker_invalid": 0,
+            "simulation_rcs": [
+              0
+            ]
+          }
+        },
+        {
+          "task": "Prob018_mux256to1",
+          "agent": {
+            "rc": 0,
+            "wall_s": 144.322,
+            "error": null
+          },
+          "judge_process": {
+            "rc": 0,
+            "wall_s": 29.579,
+            "error": null
+          },
+          "judge": {
+            "task_id": "Prob018_mux256to1",
+            "top": "TopModule",
+            "level": 3,
+            "coefficient": 1.0,
+            "stages": {
+              "compile": true,
+              "simulate": true,
+              "synth": true
+            },
+            "tool_error": null,
+            "elapsed_s": 29.5,
+            "mismatches": 0,
+            "samples": 2000
+          },
+          "total_wall_s": 173.901,
+          "solution_sha256": "d3b48ba492007fb949404d5566e35c4bf6cc1024a44e190aa73aa9123159a5c0",
+          "trace": {
+            "accepted": false,
+            "rounds": 1,
+            "model": {
+              "backend": "openai",
+              "model": "qwen2.5-coder-32b-instruct-q4_k_m.gguf",
+              "base_url": "http://127.0.0.1:8000/v1",
+              "max_tokens": 16384,
+              "temperature": 0.2,
+              "generation": {
+                "chat_template_kwargs": {
+                  "enable_thinking": false
+                }
+              }
+            },
+            "errors": [],
+            "events": 27,
+            "llm_calls": 4,
+            "llm_wall_s": 90.71,
+            "llm_purposes": {
+              "rtl": 1,
+              "selftest": 2,
+              "selftest_review": 1
+            },
+            "checker_invalid": 1,
+            "simulation_rcs": [
+              2
+            ]
+          }
+        },
+        {
+          "task": "Prob030_popcount255",
+          "agent": {
+            "rc": 0,
+            "wall_s": 353.001,
+            "error": null
+          },
+          "judge_process": {
+            "rc": 0,
+            "wall_s": 10.434,
+            "error": null
+          },
+          "judge": {
+            "task_id": "Prob030_popcount255",
+            "top": "TopModule",
+            "level": 1,
+            "coefficient": 0.2,
+            "stages": {
+              "compile": true,
+              "simulate": false,
+              "synth": false
+            },
+            "tool_error": null,
+            "elapsed_s": 10.4,
+            "mismatches": 202,
+            "samples": 215
+          },
+          "total_wall_s": 363.436,
+          "solution_sha256": "bea826fdb02a18b82cf96115b1f536dae37578becc88b0d7025a5dfedf30d12d",
+          "trace": {
+            "accepted": false,
+            "rounds": 5,
+            "model": {
+              "backend": "openai",
+              "model": "qwen2.5-coder-32b-instruct-q4_k_m.gguf",
+              "base_url": "http://127.0.0.1:8000/v1",
+              "max_tokens": 16384,
+              "temperature": 0.2,
+              "generation": {
+                "chat_template_kwargs": {
+                  "enable_thinking": false
+                }
+              }
+            },
+            "errors": [],
+            "events": 50,
+            "llm_calls": 5,
+            "llm_wall_s": 209.13,
+            "llm_purposes": {
+              "rtl": 5
+            },
+            "checker_invalid": 0,
+            "simulation_rcs": [
+              1,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "task": "Prob038_count15",
+          "agent": {
+            "rc": 0,
+            "wall_s": 150.274,
+            "error": null
+          },
+          "judge_process": {
+            "rc": 0,
+            "wall_s": 43.247,
+            "error": null
+          },
+          "judge": {
+            "task_id": "Prob038_count15",
+            "top": "TopModule",
+            "level": 3,
+            "coefficient": 1.0,
+            "stages": {
+              "compile": true,
+              "simulate": true,
+              "synth": true
+            },
+            "tool_error": null,
+            "elapsed_s": 43.0,
+            "mismatches": 0,
+            "samples": 421
+          },
+          "total_wall_s": 193.521,
+          "solution_sha256": "443a002c2c73b03239348869e014e6b0053f62cb66c472cedb8a9f75d7e6ec50",
+          "trace": {
+            "accepted": false,
+            "rounds": 1,
+            "model": {
+              "backend": "openai",
+              "model": "qwen2.5-coder-32b-instruct-q4_k_m.gguf",
+              "base_url": "http://127.0.0.1:8000/v1",
+              "max_tokens": 16384,
+              "temperature": 0.2,
+              "generation": {
+                "chat_template_kwargs": {
+                  "enable_thinking": false
+                }
+              }
+            },
+            "errors": [],
+            "events": 31,
+            "llm_calls": 5,
+            "llm_wall_s": 108.86,
+            "llm_purposes": {
+              "rtl": 1,
+              "selftest": 2,
+              "selftest_review": 2
+            },
+            "checker_invalid": 2,
+            "simulation_rcs": [
+              2
+            ]
+          }
+        },
+        {
+          "task": "Prob042_vector4",
+          "agent": {
+            "rc": 0,
+            "wall_s": 32.233,
+            "error": null
+          },
+          "judge_process": {
+            "rc": 0,
+            "wall_s": 28.357,
+            "error": null
+          },
+          "judge": {
+            "task_id": "Prob042_vector4",
+            "top": "TopModule",
+            "level": 3,
+            "coefficient": 1.0,
+            "stages": {
+              "compile": true,
+              "simulate": true,
+              "synth": true
+            },
+            "tool_error": null,
+            "elapsed_s": 28.3,
+            "mismatches": 0,
+            "samples": 100
+          },
+          "total_wall_s": 60.59,
+          "solution_sha256": "2f9b79225978084c86789338b7940418d299d241614396a69311f05b25adeef1",
+          "trace": {
+            "accepted": true,
+            "rounds": 1,
+            "model": {
+              "backend": "openai",
+              "model": "qwen2.5-coder-32b-instruct-q4_k_m.gguf",
+              "base_url": "http://127.0.0.1:8000/v1",
+              "max_tokens": 16384,
+              "temperature": 0.2,
+              "generation": {
+                "chat_template_kwargs": {
+                  "enable_thinking": false
+                }
+              }
+            },
+            "errors": [],
+            "events": 20,
+            "llm_calls": 1,
+            "llm_wall_s": 3.53,
+            "llm_purposes": {
+              "rtl": 1
+            },
+            "checker_invalid": 0,
+            "simulation_rcs": [
+              0
+            ]
+          }
+        },
+        {
+          "task": "Prob066_edgecapture",
+          "agent": {
+            "rc": 0,
+            "wall_s": 132.885,
+            "error": null
+          },
+          "judge_process": {
+            "rc": 0,
+            "wall_s": 9.929,
+            "error": null
+          },
+          "judge": {
+            "task_id": "Prob066_edgecapture",
+            "top": "TopModule",
+            "level": 1,
+            "coefficient": 0.2,
+            "stages": {
+              "compile": true,
+              "simulate": false,
+              "synth": false
+            },
+            "tool_error": null,
+            "elapsed_s": 9.9,
+            "mismatches": 93,
+            "samples": 266
+          },
+          "total_wall_s": 142.814,
+          "solution_sha256": "3e6b44f38ce3b2cafe2b6ca1dc75f6b402f3c16842dfbfff3b71ef9c087376e9",
+          "trace": {
+            "accepted": false,
+            "rounds": 5,
+            "model": {
+              "backend": "openai",
+              "model": "qwen2.5-coder-32b-instruct-q4_k_m.gguf",
+              "base_url": "http://127.0.0.1:8000/v1",
+              "max_tokens": 16384,
+              "temperature": 0.2,
+              "generation": {
+                "chat_template_kwargs": {
+                  "enable_thinking": false
+                }
+              }
+            },
+            "errors": [],
+            "events": 45,
+            "llm_calls": 5,
+            "llm_wall_s": 46.66,
+            "llm_purposes": {
+              "rtl": 5
+            },
+            "checker_invalid": 0,
+            "simulation_rcs": [
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "task": "Prob107_fsm1s",
+          "agent": {
+            "rc": 0,
+            "wall_s": 48.463,
+            "error": null
+          },
+          "judge_process": {
+            "rc": 0,
+            "wall_s": 43.094,
+            "error": null
+          },
+          "judge": {
+            "task_id": "Prob107_fsm1s",
+            "top": "TopModule",
+            "level": 3,
+            "coefficient": 1.0,
+            "stages": {
+              "compile": true,
+              "simulate": true,
+              "synth": true
+            },
+            "tool_error": null,
+            "elapsed_s": 43.0,
+            "mismatches": 0,
+            "samples": 230
+          },
+          "total_wall_s": 91.558,
+          "solution_sha256": "bad0f6c4d657f3f120033291b504c7395a829a4f452900b005c9909b4adaa58b",
+          "trace": {
+            "accepted": true,
+            "rounds": 1,
+            "model": {
+              "backend": "openai",
+              "model": "qwen2.5-coder-32b-instruct-q4_k_m.gguf",
+              "base_url": "http://127.0.0.1:8000/v1",
+              "max_tokens": 16384,
+              "temperature": 0.2,
+              "generation": {
+                "chat_template_kwargs": {
+                  "enable_thinking": false
+                }
+              }
+            },
+            "errors": [],
+            "events": 22,
+            "llm_calls": 1,
+            "llm_wall_s": 17.9,
+            "llm_purposes": {
+              "rtl": 1
+            },
+            "checker_invalid": 0,
+            "simulation_rcs": [
+              0
+            ]
+          }
+        },
+        {
+          "task": "Prob122_kmap4",
+          "agent": {
+            "rc": 0,
+            "wall_s": 32.797,
+            "error": null
+          },
+          "judge_process": {
+            "rc": 0,
+            "wall_s": 28.464,
+            "error": null
+          },
+          "judge": {
+            "task_id": "Prob122_kmap4",
+            "top": "TopModule",
+            "level": 3,
+            "coefficient": 1.0,
+            "stages": {
+              "compile": true,
+              "simulate": true,
+              "synth": true
+            },
+            "tool_error": null,
+            "elapsed_s": 28.4,
+            "mismatches": 0,
+            "samples": 232
+          },
+          "total_wall_s": 61.262,
+          "solution_sha256": "4b254105f03d69ee01181b103ea61a03b470eacccd5c6c97d2245199322b8e0b",
+          "trace": {
+            "accepted": true,
+            "rounds": 1,
+            "model": {
+              "backend": "openai",
+              "model": "qwen2.5-coder-32b-instruct-q4_k_m.gguf",
+              "base_url": "http://127.0.0.1:8000/v1",
+              "max_tokens": 16384,
+              "temperature": 0.2,
+              "generation": {
+                "chat_template_kwargs": {
+                  "enable_thinking": false
+                }
+              }
+            },
+            "errors": [],
+            "events": 19,
+            "llm_calls": 1,
+            "llm_wall_s": 3.74,
+            "llm_purposes": {
+              "rtl": 1
+            },
+            "checker_invalid": 0,
+            "simulation_rcs": [
+              0
+            ]
+          }
+        },
+        {
+          "task": "Prob145_circuit8",
+          "agent": {
+            "rc": 0,
+            "wall_s": 152.941,
+            "error": null
+          },
+          "judge_process": {
+            "rc": 0,
+            "wall_s": 10.031,
+            "error": null
+          },
+          "judge": {
+            "task_id": "Prob145_circuit8",
+            "top": "TopModule",
+            "level": 1,
+            "coefficient": 0.2,
+            "stages": {
+              "compile": true,
+              "simulate": false,
+              "synth": false
+            },
+            "tool_error": null,
+            "elapsed_s": 9.9,
+            "mismatches": 182,
+            "samples": 240
+          },
+          "total_wall_s": 162.973,
+          "solution_sha256": "ad3c75b7fac2ce4234d22730588dda88c1a93ae2fd7716a5d38e6707f43f2fb1",
+          "trace": {
+            "accepted": false,
+            "rounds": 5,
+            "model": {
+              "backend": "openai",
+              "model": "qwen2.5-coder-32b-instruct-q4_k_m.gguf",
+              "base_url": "http://127.0.0.1:8000/v1",
+              "max_tokens": 16384,
+              "temperature": 0.2,
+              "generation": {
+                "chat_template_kwargs": {
+                  "enable_thinking": false
+                }
+              }
+            },
+            "errors": [],
+            "events": 41,
+            "llm_calls": 5,
+            "llm_wall_s": 70.59,
+            "llm_purposes": {
+              "rtl": 5
+            },
+            "checker_invalid": 0,
+            "simulation_rcs": [
+              1,
+              1
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "batch": "r11-focused-20261030",
+      "metadata": {
+        "started_utc": "2026-10-30T06:20:17.716094+00:00",
+        "source_revision": "3369812",
+        "agent_root": "/workspace/40070_rtlagent_validation_20261030-r11",
+        "task_root": "/workspace/rtlagent2026/tasks/veval_v2_clean/tasks",
+        "judge": "/workspace/rtlagent2026/selftest/judge.py",
+        "tasks": [
+          "Prob086_lfsr5",
+          "Prob137_fsm_serial",
+          "Prob153_gshare"
+        ],
+        "judge_sha256": "02238c62b598de5a835374b8dcbff9eebbeca7cd9fc01db8b5aad2d018882e10",
+        "source_sha256": {
+          "Dockerfile": "c0c6c462acf9845527ec8754540f04fa5217d8f6af2d8e8a9269dc1e13580c85",
+          "README.md": "dee4e6f44bad9398d07b892a9ae5d7a07c32e6a8e09df84149714cc2b887abe5",
+          "REPORT.md": "4148d5163e3711526e00813e4f70d769de57271c759109f3591057e52929b73b",
+          "agent/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "agent/llm.py": "227c736804933f43e9dac15eaac9e7d2ca393051a7b502c7f93808c16f2bf9c3",
+          "agent/main.py": "80d0e03ec1ac5f4561eb824b6592809b1b0909c9e12b2e6c0f25655ad4004136",
+          "agent/oracles.py": "bab5c459ac6075dd24687cbe46d1102c2d138781a65186e364180764b056c4f6",
+          "agent/prompts/repair.md": "0b2eb1509699531d309c89eb4330bbe214a7e4051eecd53a45aadb45cf546b92",
+          "agent/prompts/system.md": "9889b8dee3046a8571f716f46a2d4e5f1351783d1e894a72e31cac076f166d2e",
+          "agent/skills.py": "34f5ae8a33103aa937fa65dd3fec86bca51defdbf978eb2b692e678557d16eea",
+          "agent/spec_contract.py": "9b54bf3a1d00866ceefa0c899aa23f2f052bc2932030193469df8ccfc4d3c4fd",
+          "agent/tools.py": "8da36ee0139de15b2178133cfc20ce0a2adadf85d54d19475525ddefe79f36c3",
+          "agent/verification.py": "a6dd4cdf5e70bbe18967b2e5a056d99b74f01028119de35205dd29f46e886d22",
+          "baseline.py": "ae74edbba7f4647e5958307c4d1a962ec620a515f6644188c940d3ec658183bf",
+          "docs/API_CONTRACT.md": "f8d0881998ce7f9d8a2947934f9940180c5bfa24a2ead971e25b0b143db17044",
+          "docs/DEADLINE_FALLBACK.md": "27e3a356f0951390c995ce063bac6be21f89efd61257f8743c9e01c923ca85ca",
+          "docs/VALIDATION_20261030.md": "ab12a458453d7f5f4763a2d6c021b42fe3623879a35f60f75e70f4a1f2549020",
+          "manifest.json": "38d1de9cb734bc5fe283cb941b19d97db421a5878fc680bce17a8c8478547208",
+          "model/MODEL.md": "b8d351e033c4c7a2fd10e072de90ae5f589aaa682fa9d439ec2b74adfbe1a832",
+          "requirements.txt": "5a71c13f67505225c8f91c8702394b74b2aa0e92a4e8fe79d15f773aaf38afbd",
+          "run.sh": "b25e15b9186afe6b8e863107dbe71c667f1c36d25ab97ce92cc6598b9d27098e",
+          "run_baseline.sh": "5c46c40d32c0cf4c4e1dc52ae12e60f8396a0deccafaa4e6f69d7316a3482e75",
+          "serve/README.md": "641de485c3dad6983642c92db07e15ebd9383b6c3ae457742f5c05c5c7a84b31",
+          "serve/run_api.sh": "1345ad09df0617922ebe2db1f73583396a92bc366c6301f81c38b6b0402e2bce",
+          "serve/serve_api.py": "45e9e0f8c560267d4c6b3635f7382a0386bd48ba650ba194ad6582d879219b11",
+          "serve/start.sh": "c28d05ceba83c6c3e97001fbd475be95541b51aa17257d5b22e1eeca0b0af010",
+          "serve/vllm.sh": "42610f3c5984194342cf20c9c02cdf4c5cd523a603ebda56b37b38e9af54bb34",
+          "skill/README.md": "01ea0b9b189f115dd3870d477a8a57c37ff7168e20947f07d94b5b2de9d80fe6",
+          "skill/rtl-arithmetic-widths/SKILL.md": "01f42c0cd637d536292d93a85b55e46a75cf5350954c14ca29836c7c84389253",
+          "skill/rtl-branch-predictor/SKILL.md": "4909c34efe73323f32bd022b694ee6e5a421362b2ff102b297071edc13cd32f2",
+          "skill/rtl-fsm-output-timing/SKILL.md": "4c43ecf585d2ab32cefdb6dc3668f8d959612d7edae5329b8ff29227d750cf58",
+          "skill/rtl-module-interface-contract/SKILL.md": "2ed98c08a2a80b71fdd8c5b54dde00c548896ab485cd584be5ddeb33cb5da08a",
+          "skill/rtl-sequential-timing/SKILL.md": "a22387fbce3e5925bda7393ac23aa3b515f8745c1d9e9ce2dbae552e0e6675f9",
+          "skill/rtl-serial-receiver/SKILL.md": "8a369c2068124073f3106a8d8473a1592c3fe96f6d28c808ff1309da0b990c62",
+          "skill/rtl-shift-register-pattern/SKILL.md": "c2c1a031080a2f8cd2fb1f97236661664fef943c7d9d0131b6dfb3b8bd122953",
+          "tests/regression_agent.py": "ca53dcf4a17abfe9e5e296d6811b189d51e05a650194b82822f2ace1cb15204e",
+          "tests/test_agent.py": "ec597a3b061d0a9b508241b6f9c65d05759b461c15e3aa71d10522ef46379c74",
+          "tests/test_oracles_vivado.py": "d7994b0daafcdef5e396a703c070f67b474f3a91faee82b99728cd88f11677c7",
+          "tests/test_regression_agent.py": "52e534c39a941e31500ac2663d0696b84baf7631b72808fe0bb96865e2c955cc",
+          "tests/test_serve_api.py": "f384a5040832cd4dd2b6899aeb08bdb01677d5662587dc164965bf5e94fbab22"
+        },
+        "limits": {
+          "agent_s": 635,
+          "judge_s": 120
+        },
+        "timing": "sequential; agent includes model/tools; judge measured separately",
+        "environment": {
+          "AGENT_DEADLINE_S": "600",
+          "AGENT_GENERATION_S": "240",
+          "AGENT_TMP": "/var/tmp",
+          "LLM_BACKEND": "openai",
+          "LLM_MODEL": "qwen2.5-coder-32b-instruct-q4_k_m.gguf"
+        }
+      },
+      "metadata_file_sha256": "7f69a78e50d4dda770fee5c3575590c78db9b51d55789ead50b14508668eb5e5",
+      "results_file_sha256": "e288a9f6afa298a95b081aace3bdb57ec97ceafaba857a2ebd834f3e321a2d7b",
+      "complete": true,
+      "results": [
+        {
+          "task": "Prob086_lfsr5",
+          "agent": {
+            "rc": 0,
+            "wall_s": 207.275,
+            "error": null
+          },
+          "judge_process": {
+            "rc": 0,
+            "wall_s": 10.032,
+            "error": null
+          },
+          "judge": {
+            "task_id": "Prob086_lfsr5",
+            "top": "TopModule",
+            "level": 1,
+            "coefficient": 0.2,
+            "stages": {
+              "compile": true,
+              "simulate": false,
+              "synth": false
+            },
+            "tool_error": null,
+            "elapsed_s": 9.9,
+            "mismatches": 4280,
+            "samples": 4443
+          },
+          "total_wall_s": 217.307,
+          "solution_sha256": "d965e56f9bc752bf85b530e14075d4acf9a9ebbb0b301ef6e92aa4b681055ac4",
+          "trace": {
+            "accepted": false,
+            "rounds": 5,
+            "model": {
+              "backend": "openai",
+              "model": "qwen2.5-coder-32b-instruct-q4_k_m.gguf",
+              "base_url": "http://127.0.0.1:8000/v1",
+              "max_tokens": 16384,
+              "temperature": 0.2,
+              "generation": {
+                "chat_template_kwargs": {
+                  "enable_thinking": false
+                }
+              }
+            },
+            "errors": [],
+            "events": 55,
+            "llm_calls": 5,
+            "llm_wall_s": 62.02,
+            "llm_purposes": {
+              "rtl": 5
+            },
+            "checker_invalid": 0,
+            "simulation_rcs": [
+              1,
+              1,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "task": "Prob137_fsm_serial",
+          "agent": {
+            "rc": 0,
+            "wall_s": 170.113,
+            "error": null
+          },
+          "judge_process": {
+            "rc": 0,
+            "wall_s": 10.03,
+            "error": null
+          },
+          "judge": {
+            "task_id": "Prob137_fsm_serial",
+            "top": "TopModule",
+            "level": 1,
+            "coefficient": 0.2,
+            "stages": {
+              "compile": true,
+              "simulate": false,
+              "synth": false
+            },
+            "tool_error": null,
+            "elapsed_s": 10.0,
+            "mismatches": 88,
+            "samples": 905
+          },
+          "total_wall_s": 180.143,
+          "solution_sha256": "f1b6acf6cd0e06f4df23d4817a223be2845b01407620c23839e973fe921181a0",
+          "trace": {
+            "accepted": false,
+            "rounds": 1,
+            "model": {
+              "backend": "openai",
+              "model": "qwen2.5-coder-32b-instruct-q4_k_m.gguf",
+              "base_url": "http://127.0.0.1:8000/v1",
+              "max_tokens": 16384,
+              "temperature": 0.2,
+              "generation": {
+                "chat_template_kwargs": {
+                  "enable_thinking": false
+                }
+              }
+            },
+            "errors": [],
+            "events": 25,
+            "llm_calls": 1,
+            "llm_wall_s": 27.3,
+            "llm_purposes": {
+              "rtl": 1
+            },
+            "checker_invalid": 2,
+            "simulation_rcs": []
+          }
+        },
+        {
+          "task": "Prob153_gshare",
+          "agent": {
+            "rc": 0,
+            "wall_s": 326.87,
+            "error": null
+          },
+          "judge_process": {
+            "rc": 0,
+            "wall_s": 10.183,
+            "error": null
+          },
+          "judge": {
+            "task_id": "Prob153_gshare",
+            "top": "TopModule",
+            "level": 1,
+            "coefficient": 0.2,
+            "stages": {
+              "compile": true,
+              "simulate": false,
+              "synth": false
+            },
+            "tool_error": null,
+            "elapsed_s": 10.1,
+            "mismatches": 507,
+            "samples": 1083
+          },
+          "total_wall_s": 337.054,
+          "solution_sha256": "a2e8f6f2304dae4eade3a7debd187411fa35210f401b8ab3ee19412d77a42b4e",
+          "trace": {
+            "accepted": false,
+            "rounds": 5,
+            "model": {
+              "backend": "openai",
+              "model": "qwen2.5-coder-32b-instruct-q4_k_m.gguf",
+              "base_url": "http://127.0.0.1:8000/v1",
+              "max_tokens": 16384,
+              "temperature": 0.2,
+              "generation": {
+                "chat_template_kwargs": {
+                  "enable_thinking": false
+                }
+              }
+            },
+            "errors": [],
+            "events": 56,
+            "llm_calls": 5,
+            "llm_wall_s": 165.24,
+            "llm_purposes": {
+              "rtl": 5
+            },
+            "checker_invalid": 0,
+            "simulation_rcs": [
+              1,
+              1,
+              1,
+              1,
+              1
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "batch": "r7-real-20261030",
+      "metadata": {
+        "started_utc": "2026-10-30T05:35:55.669175+00:00",
+        "source_revision": "3232bf5",
+        "agent_root": "/workspace/40070_rtlagent_validation_20261030-r7",
+        "task_root": "/workspace/rtlagent2026/tasks/veval_v2_clean/tasks",
+        "judge": "/workspace/rtlagent2026/selftest/judge.py",
+        "tasks": [
+          "Prob030_popcount255",
+          "Prob086_lfsr5",
+          "Prob107_fsm1s",
+          "Prob137_fsm_serial",
+          "Prob153_gshare"
+        ],
+        "judge_sha256": "02238c62b598de5a835374b8dcbff9eebbeca7cd9fc01db8b5aad2d018882e10",
+        "source_sha256": {
+          "Dockerfile": "c0c6c462acf9845527ec8754540f04fa5217d8f6af2d8e8a9269dc1e13580c85",
+          "README.md": "dee4e6f44bad9398d07b892a9ae5d7a07c32e6a8e09df84149714cc2b887abe5",
+          "REPORT.md": "4148d5163e3711526e00813e4f70d769de57271c759109f3591057e52929b73b",
+          "agent/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "agent/llm.py": "227c736804933f43e9dac15eaac9e7d2ca393051a7b502c7f93808c16f2bf9c3",
+          "agent/main.py": "80d0e03ec1ac5f4561eb824b6592809b1b0909c9e12b2e6c0f25655ad4004136",
+          "agent/oracles.py": "340b4955e7680c9ccb2ea2f47602a2ab97469586d20a87c1a465f6f45a9db1b9",
+          "agent/prompts/repair.md": "7888be24ee6359f622953e4d24d8176df9ae9e91900f8cf30f8a2102636f2f95",
+          "agent/prompts/system.md": "9889b8dee3046a8571f716f46a2d4e5f1351783d1e894a72e31cac076f166d2e",
+          "agent/skills.py": "34f5ae8a33103aa937fa65dd3fec86bca51defdbf978eb2b692e678557d16eea",
+          "agent/spec_contract.py": "9b54bf3a1d00866ceefa0c899aa23f2f052bc2932030193469df8ccfc4d3c4fd",
+          "agent/tools.py": "8da36ee0139de15b2178133cfc20ce0a2adadf85d54d19475525ddefe79f36c3",
+          "agent/verification.py": "d64e8b47845265b603a1524bd4d6a18bae10503c7c46af3b38604ca426944a58",
+          "baseline.py": "ae74edbba7f4647e5958307c4d1a962ec620a515f6644188c940d3ec658183bf",
+          "docs/API_CONTRACT.md": "f8d0881998ce7f9d8a2947934f9940180c5bfa24a2ead971e25b0b143db17044",
+          "docs/DEADLINE_FALLBACK.md": "27e3a356f0951390c995ce063bac6be21f89efd61257f8743c9e01c923ca85ca",
+          "docs/VALIDATION_20261030.md": "ab12a458453d7f5f4763a2d6c021b42fe3623879a35f60f75e70f4a1f2549020",
+          "manifest.json": "38d1de9cb734bc5fe283cb941b19d97db421a5878fc680bce17a8c8478547208",
+          "model/MODEL.md": "b8d351e033c4c7a2fd10e072de90ae5f589aaa682fa9d439ec2b74adfbe1a832",
+          "requirements.txt": "5a71c13f67505225c8f91c8702394b74b2aa0e92a4e8fe79d15f773aaf38afbd",
+          "run.sh": "b25e15b9186afe6b8e863107dbe71c667f1c36d25ab97ce92cc6598b9d27098e",
+          "run_baseline.sh": "5c46c40d32c0cf4c4e1dc52ae12e60f8396a0deccafaa4e6f69d7316a3482e75",
+          "serve/README.md": "641de485c3dad6983642c92db07e15ebd9383b6c3ae457742f5c05c5c7a84b31",
+          "serve/run_api.sh": "1345ad09df0617922ebe2db1f73583396a92bc366c6301f81c38b6b0402e2bce",
+          "serve/serve_api.py": "45e9e0f8c560267d4c6b3635f7382a0386bd48ba650ba194ad6582d879219b11",
+          "serve/start.sh": "c28d05ceba83c6c3e97001fbd475be95541b51aa17257d5b22e1eeca0b0af010",
+          "serve/vllm.sh": "42610f3c5984194342cf20c9c02cdf4c5cd523a603ebda56b37b38e9af54bb34",
+          "skill/README.md": "01ea0b9b189f115dd3870d477a8a57c37ff7168e20947f07d94b5b2de9d80fe6",
+          "skill/rtl-arithmetic-widths/SKILL.md": "01f42c0cd637d536292d93a85b55e46a75cf5350954c14ca29836c7c84389253",
+          "skill/rtl-branch-predictor/SKILL.md": "4909c34efe73323f32bd022b694ee6e5a421362b2ff102b297071edc13cd32f2",
+          "skill/rtl-fsm-output-timing/SKILL.md": "4c43ecf585d2ab32cefdb6dc3668f8d959612d7edae5329b8ff29227d750cf58",
+          "skill/rtl-module-interface-contract/SKILL.md": "2ed98c08a2a80b71fdd8c5b54dde00c548896ab485cd584be5ddeb33cb5da08a",
+          "skill/rtl-sequential-timing/SKILL.md": "a22387fbce3e5925bda7393ac23aa3b515f8745c1d9e9ce2dbae552e0e6675f9",
+          "skill/rtl-serial-receiver/SKILL.md": "8a369c2068124073f3106a8d8473a1592c3fe96f6d28c808ff1309da0b990c62",
+          "skill/rtl-shift-register-pattern/SKILL.md": "45175b234944d1ca617403d426e9aa855c35095d92d01ddcfc4f2a5f323560d8",
+          "tests/regression_agent.py": "ca53dcf4a17abfe9e5e296d6811b189d51e05a650194b82822f2ace1cb15204e",
+          "tests/test_agent.py": "457ba94113bdaf384740b3c84ecbf189d580c4ae0a9922b836a7d39ed15f9a92",
+          "tests/test_oracles_vivado.py": "d7994b0daafcdef5e396a703c070f67b474f3a91faee82b99728cd88f11677c7",
+          "tests/test_regression_agent.py": "52e534c39a941e31500ac2663d0696b84baf7631b72808fe0bb96865e2c955cc",
+          "tests/test_serve_api.py": "f384a5040832cd4dd2b6899aeb08bdb01677d5662587dc164965bf5e94fbab22"
+        },
+        "limits": {
+          "agent_s": 395,
+          "judge_s": 120
+        },
+        "timing": "sequential; agent includes model/tools; judge measured separately",
+        "environment": {
+          "AGENT_DEADLINE_S": "360",
+          "AGENT_CHECKER_S": "45",
+          "AGENT_GENERATION_S": "180",
+          "AGENT_TMP": "/var/tmp",
+          "LLM_BACKEND": "openai",
+          "LLM_MODEL": "qwen2.5-coder-32b-instruct-q4_k_m.gguf"
+        }
+      },
+      "metadata_file_sha256": "490d734abcf0d2c29d5b2c5e6ee9c51e0c6cdde5673bb5f944b4c9574cf03b84",
+      "results_file_sha256": "97db44e1a1b353f31891092a01d77370e1e7809c84fdf64fdcda4428f4764da2",
+      "complete": true,
+      "results": [
+        {
+          "task": "Prob030_popcount255",
+          "agent": {
+            "rc": 0,
+            "wall_s": 42.103,
+            "error": null
+          },
+          "judge_process": {
+            "rc": 0,
+            "wall_s": 33.068,
+            "error": null
+          },
+          "judge": {
+            "task_id": "Prob030_popcount255",
+            "top": "TopModule",
+            "level": 3,
+            "coefficient": 1.0,
+            "stages": {
+              "compile": true,
+              "simulate": true,
+              "synth": true
+            },
+            "tool_error": null,
+            "elapsed_s": 33.0,
+            "mismatches": 0,
+            "samples": 215
+          },
+          "total_wall_s": 75.171,
+          "solution_sha256": "a098db0e0b90cf2f850fb94086a6ce3b37e7893c39863666e776139e0a473e6f",
+          "trace": {
+            "accepted": true,
+            "rounds": 1,
+            "model": {
+              "backend": "openai",
+              "model": "qwen2.5-coder-32b-instruct-q4_k_m.gguf",
+              "base_url": "http://127.0.0.1:8000/v1",
+              "max_tokens": 16384,
+              "temperature": 0.2,
+              "generation": {
+                "chat_template_kwargs": {
+                  "enable_thinking": false
+                }
+              }
+            },
+            "errors": [],
+            "events": 20,
+            "llm_calls": 1,
+            "llm_wall_s": 9.27,
+            "llm_purposes": {
+              "rtl": 1
+            },
+            "checker_invalid": 0,
+            "simulation_rcs": [
+              0
+            ]
+          }
+        },
+        {
+          "task": "Prob086_lfsr5",
+          "agent": {
+            "rc": 0,
+            "wall_s": 134.116,
+            "error": null
+          },
+          "judge_process": {
+            "rc": 0,
+            "wall_s": 10.081,
+            "error": null
+          },
+          "judge": {
+            "task_id": "Prob086_lfsr5",
+            "top": "TopModule",
+            "level": 1,
+            "coefficient": 0.2,
+            "stages": {
+              "compile": true,
+              "simulate": false,
+              "synth": false
+            },
+            "tool_error": null,
+            "elapsed_s": 10.0,
+            "mismatches": 4280,
+            "samples": 4443
+          },
+          "total_wall_s": 144.198,
+          "solution_sha256": "328cd3daa89653072891a522a6705cadb3a71600968fe2ddfa2b91d257c43645",
+          "trace": {
+            "accepted": false,
+            "rounds": 5,
+            "model": {
+              "backend": "openai",
+              "model": "qwen2.5-coder-32b-instruct-q4_k_m.gguf",
+              "base_url": "http://127.0.0.1:8000/v1",
+              "max_tokens": 16384,
+              "temperature": 0.2,
+              "generation": {
+                "chat_template_kwargs": {
+                  "enable_thinking": false
+                }
+              }
+            },
+            "errors": [],
+            "events": 45,
+            "llm_calls": 5,
+            "llm_wall_s": 45.66,
+            "llm_purposes": {
+              "rtl": 5
+            },
+            "checker_invalid": 0,
+            "simulation_rcs": [
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "task": "Prob107_fsm1s",
+          "agent": {
+            "rc": 0,
+            "wall_s": 46.211,
+            "error": null
+          },
+          "judge_process": {
+            "rc": 0,
+            "wall_s": 42.732,
+            "error": null
+          },
+          "judge": {
+            "task_id": "Prob107_fsm1s",
+            "top": "TopModule",
+            "level": 3,
+            "coefficient": 1.0,
+            "stages": {
+              "compile": true,
+              "simulate": true,
+              "synth": true
+            },
+            "tool_error": null,
+            "elapsed_s": 42.6,
+            "mismatches": 0,
+            "samples": 230
+          },
+          "total_wall_s": 88.943,
+          "solution_sha256": "23870178e30e6ab1ea922b42c8d4372b453aff8d50a877d53465c99d2a1ff332",
+          "trace": {
+            "accepted": true,
+            "rounds": 1,
+            "model": {
+              "backend": "openai",
+              "model": "qwen2.5-coder-32b-instruct-q4_k_m.gguf",
+              "base_url": "http://127.0.0.1:8000/v1",
+              "max_tokens": 16384,
+              "temperature": 0.2,
+              "generation": {
+                "chat_template_kwargs": {
+                  "enable_thinking": false
+                }
+              }
+            },
+            "errors": [],
+            "events": 20,
+            "llm_calls": 1,
+            "llm_wall_s": 17.36,
+            "llm_purposes": {
+              "rtl": 1
+            },
+            "checker_invalid": 0,
+            "simulation_rcs": [
+              0
+            ]
+          }
+        },
+        {
+          "task": "Prob137_fsm_serial",
+          "agent": {
+            "rc": 0,
+            "wall_s": 135.824,
+            "error": null
+          },
+          "judge_process": {
+            "rc": 0,
+            "wall_s": 10.036,
+            "error": null
+          },
+          "judge": {
+            "task_id": "Prob137_fsm_serial",
+            "top": "TopModule",
+            "level": 1,
+            "coefficient": 0.2,
+            "stages": {
+              "compile": true,
+              "simulate": false,
+              "synth": false
+            },
+            "tool_error": null,
+            "elapsed_s": 9.9,
+            "mismatches": 92,
+            "samples": 905
+          },
+          "total_wall_s": 145.86,
+          "solution_sha256": "ccceef4183759f96f23201bd6e23e7d799490e6e8f0166143714784ab48f9d68",
+          "trace": {
+            "accepted": false,
+            "rounds": 1,
+            "model": {
+              "backend": "openai",
+              "model": "qwen2.5-coder-32b-instruct-q4_k_m.gguf",
+              "base_url": "http://127.0.0.1:8000/v1",
+              "max_tokens": 16384,
+              "temperature": 0.2,
+              "generation": {
+                "chat_template_kwargs": {
+                  "enable_thinking": false
+                }
+              }
+            },
+            "errors": [],
+            "events": 23,
+            "llm_calls": 1,
+            "llm_wall_s": 23.82,
+            "llm_purposes": {
+              "rtl": 1
+            },
+            "checker_invalid": 2,
+            "simulation_rcs": []
+          }
+        },
+        {
+          "task": "Prob153_gshare",
+          "agent": {
+            "rc": 0,
+            "wall_s": 328.047,
+            "error": null
+          },
+          "judge_process": {
+            "rc": 0,
+            "wall_s": 10.03,
+            "error": null
+          },
+          "judge": {
+            "task_id": "Prob153_gshare",
+            "top": "TopModule",
+            "level": 1,
+            "coefficient": 0.2,
+            "stages": {
+              "compile": true,
+              "simulate": false,
+              "synth": false
+            },
+            "tool_error": null,
+            "elapsed_s": 10.0,
+            "mismatches": 544,
+            "samples": 1083
+          },
+          "total_wall_s": 338.078,
+          "solution_sha256": "2762db0a73348fa14762f1d769bb83ce8c2333c3f5dff51071496c5a37e41e08",
+          "trace": {
+            "accepted": false,
+            "rounds": 5,
+            "model": {
+              "backend": "openai",
+              "model": "qwen2.5-coder-32b-instruct-q4_k_m.gguf",
+              "base_url": "http://127.0.0.1:8000/v1",
+              "max_tokens": 16384,
+              "temperature": 0.2,
+              "generation": {
+                "chat_template_kwargs": {
+                  "enable_thinking": false
+                }
+              }
+            },
+            "errors": [],
+            "events": 53,
+            "llm_calls": 5,
+            "llm_wall_s": 175.36,
+            "llm_purposes": {
+              "rtl": 5
+            },
+            "checker_invalid": 0,
+            "simulation_rcs": [
+              1,
+              1,
+              1,
+              1
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "batch": "r8-focused-20261030",
+      "metadata": {
+        "started_utc": "2026-10-30T05:58:03.974027+00:00",
+        "source_revision": "9099804",
+        "agent_root": "/workspace/40070_rtlagent_validation_20261030-r8",
+        "task_root": "/workspace/rtlagent2026/tasks/veval_v2_clean/tasks",
+        "judge": "/workspace/rtlagent2026/selftest/judge.py",
+        "tasks": [
+          "Prob086_lfsr5",
+          "Prob137_fsm_serial",
+          "Prob153_gshare"
+        ],
+        "judge_sha256": "02238c62b598de5a835374b8dcbff9eebbeca7cd9fc01db8b5aad2d018882e10",
+        "source_sha256": {
+          "Dockerfile": "c0c6c462acf9845527ec8754540f04fa5217d8f6af2d8e8a9269dc1e13580c85",
+          "README.md": "dee4e6f44bad9398d07b892a9ae5d7a07c32e6a8e09df84149714cc2b887abe5",
+          "REPORT.md": "4148d5163e3711526e00813e4f70d769de57271c759109f3591057e52929b73b",
+          "agent/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "agent/llm.py": "227c736804933f43e9dac15eaac9e7d2ca393051a7b502c7f93808c16f2bf9c3",
+          "agent/main.py": "80d0e03ec1ac5f4561eb824b6592809b1b0909c9e12b2e6c0f25655ad4004136",
+          "agent/oracles.py": "340b4955e7680c9ccb2ea2f47602a2ab97469586d20a87c1a465f6f45a9db1b9",
+          "agent/prompts/repair.md": "0b2eb1509699531d309c89eb4330bbe214a7e4051eecd53a45aadb45cf546b92",
+          "agent/prompts/system.md": "9889b8dee3046a8571f716f46a2d4e5f1351783d1e894a72e31cac076f166d2e",
+          "agent/skills.py": "34f5ae8a33103aa937fa65dd3fec86bca51defdbf978eb2b692e678557d16eea",
+          "agent/spec_contract.py": "9b54bf3a1d00866ceefa0c899aa23f2f052bc2932030193469df8ccfc4d3c4fd",
+          "agent/tools.py": "8da36ee0139de15b2178133cfc20ce0a2adadf85d54d19475525ddefe79f36c3",
+          "agent/verification.py": "d64e8b47845265b603a1524bd4d6a18bae10503c7c46af3b38604ca426944a58",
+          "baseline.py": "ae74edbba7f4647e5958307c4d1a962ec620a515f6644188c940d3ec658183bf",
+          "docs/API_CONTRACT.md": "f8d0881998ce7f9d8a2947934f9940180c5bfa24a2ead971e25b0b143db17044",
+          "docs/DEADLINE_FALLBACK.md": "27e3a356f0951390c995ce063bac6be21f89efd61257f8743c9e01c923ca85ca",
+          "docs/VALIDATION_20261030.md": "ab12a458453d7f5f4763a2d6c021b42fe3623879a35f60f75e70f4a1f2549020",
+          "manifest.json": "38d1de9cb734bc5fe283cb941b19d97db421a5878fc680bce17a8c8478547208",
+          "model/MODEL.md": "b8d351e033c4c7a2fd10e072de90ae5f589aaa682fa9d439ec2b74adfbe1a832",
+          "requirements.txt": "5a71c13f67505225c8f91c8702394b74b2aa0e92a4e8fe79d15f773aaf38afbd",
+          "run.sh": "b25e15b9186afe6b8e863107dbe71c667f1c36d25ab97ce92cc6598b9d27098e",
+          "run_baseline.sh": "5c46c40d32c0cf4c4e1dc52ae12e60f8396a0deccafaa4e6f69d7316a3482e75",
+          "serve/README.md": "641de485c3dad6983642c92db07e15ebd9383b6c3ae457742f5c05c5c7a84b31",
+          "serve/run_api.sh": "1345ad09df0617922ebe2db1f73583396a92bc366c6301f81c38b6b0402e2bce",
+          "serve/serve_api.py": "45e9e0f8c560267d4c6b3635f7382a0386bd48ba650ba194ad6582d879219b11",
+          "serve/start.sh": "c28d05ceba83c6c3e97001fbd475be95541b51aa17257d5b22e1eeca0b0af010",
+          "serve/vllm.sh": "42610f3c5984194342cf20c9c02cdf4c5cd523a603ebda56b37b38e9af54bb34",
+          "skill/README.md": "01ea0b9b189f115dd3870d477a8a57c37ff7168e20947f07d94b5b2de9d80fe6",
+          "skill/rtl-arithmetic-widths/SKILL.md": "01f42c0cd637d536292d93a85b55e46a75cf5350954c14ca29836c7c84389253",
+          "skill/rtl-branch-predictor/SKILL.md": "4909c34efe73323f32bd022b694ee6e5a421362b2ff102b297071edc13cd32f2",
+          "skill/rtl-fsm-output-timing/SKILL.md": "4c43ecf585d2ab32cefdb6dc3668f8d959612d7edae5329b8ff29227d750cf58",
+          "skill/rtl-module-interface-contract/SKILL.md": "2ed98c08a2a80b71fdd8c5b54dde00c548896ab485cd584be5ddeb33cb5da08a",
+          "skill/rtl-sequential-timing/SKILL.md": "a22387fbce3e5925bda7393ac23aa3b515f8745c1d9e9ce2dbae552e0e6675f9",
+          "skill/rtl-serial-receiver/SKILL.md": "8a369c2068124073f3106a8d8473a1592c3fe96f6d28c808ff1309da0b990c62",
+          "skill/rtl-shift-register-pattern/SKILL.md": "c2c1a031080a2f8cd2fb1f97236661664fef943c7d9d0131b6dfb3b8bd122953",
+          "tests/regression_agent.py": "ca53dcf4a17abfe9e5e296d6811b189d51e05a650194b82822f2ace1cb15204e",
+          "tests/test_agent.py": "c218383f05cd1cd4602529590c4e8870302fb9786620c38ee8d50116c65851b3",
+          "tests/test_oracles_vivado.py": "d7994b0daafcdef5e396a703c070f67b474f3a91faee82b99728cd88f11677c7",
+          "tests/test_regression_agent.py": "52e534c39a941e31500ac2663d0696b84baf7631b72808fe0bb96865e2c955cc",
+          "tests/test_serve_api.py": "f384a5040832cd4dd2b6899aeb08bdb01677d5662587dc164965bf5e94fbab22"
+        },
+        "limits": {
+          "agent_s": 635,
+          "judge_s": 120
+        },
+        "timing": "sequential; agent includes model/tools; judge measured separately",
+        "environment": {
+          "AGENT_DEADLINE_S": "600",
+          "AGENT_GENERATION_S": "240",
+          "AGENT_TMP": "/var/tmp",
+          "LLM_BACKEND": "openai",
+          "LLM_MODEL": "qwen2.5-coder-32b-instruct-q4_k_m.gguf"
+        }
+      },
+      "metadata_file_sha256": "0b8f7a65e60189bfa1151ff0cc08ecea88d3136c51ce8e663800ab5faf00fe7d",
+      "results_file_sha256": "401b749bb45053c3e98f8db39ec94a947146c3955fc4272191f676905db2f4f1",
+      "complete": true,
+      "results": [
+        {
+          "task": "Prob086_lfsr5",
+          "agent": {
+            "rc": 0,
+            "wall_s": 320.984,
+            "error": null
+          },
+          "judge_process": {
+            "rc": 0,
+            "wall_s": 10.429,
+            "error": null
+          },
+          "judge": {
+            "task_id": "Prob086_lfsr5",
+            "top": "TopModule",
+            "level": 1,
+            "coefficient": 0.2,
+            "stages": {
+              "compile": true,
+              "simulate": false,
+              "synth": false
+            },
+            "tool_error": null,
+            "elapsed_s": 10.3,
+            "mismatches": 4280,
+            "samples": 4443
+          },
+          "total_wall_s": 331.414,
+          "solution_sha256": "031ef4e9155daab7a5b7e4ff95ac6f939b554500bd56acb5fc13db22c21a148b",
+          "trace": {
+            "accepted": false,
+            "rounds": 3,
+            "model": {
+              "backend": "openai",
+              "model": "qwen2.5-coder-32b-instruct-q4_k_m.gguf",
+              "base_url": "http://127.0.0.1:8000/v1",
+              "max_tokens": 16384,
+              "temperature": 0.2,
+              "generation": {
+                "chat_template_kwargs": {
+                  "enable_thinking": false
+                }
+              }
+            },
+            "errors": [],
+            "events": 30,
+            "llm_calls": 2,
+            "llm_wall_s": 23.17,
+            "llm_purposes": {
+              "rtl": 2
+            },
+            "checker_invalid": 0,
+            "simulation_rcs": [
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "task": "Prob137_fsm_serial",
+          "agent": {
+            "rc": 0,
+            "wall_s": 165.27,
+            "error": null
+          },
+          "judge_process": {
+            "rc": 0,
+            "wall_s": 10.082,
+            "error": null
+          },
+          "judge": {
+            "task_id": "Prob137_fsm_serial",
+            "top": "TopModule",
+            "level": 1,
+            "coefficient": 0.2,
+            "stages": {
+              "compile": true,
+              "simulate": false,
+              "synth": false
+            },
+            "tool_error": null,
+            "elapsed_s": 10.0,
+            "mismatches": 92,
+            "samples": 905
+          },
+          "total_wall_s": 175.353,
+          "solution_sha256": "033dc9785cdbad2798d57aa9dda008777920b3742c34c6316c5c515c20cc795b",
+          "trace": {
+            "accepted": false,
+            "rounds": 1,
+            "model": {
+              "backend": "openai",
+              "model": "qwen2.5-coder-32b-instruct-q4_k_m.gguf",
+              "base_url": "http://127.0.0.1:8000/v1",
+              "max_tokens": 16384,
+              "temperature": 0.2,
+              "generation": {
+                "chat_template_kwargs": {
+                  "enable_thinking": false
+                }
+              }
+            },
+            "errors": [],
+            "events": 23,
+            "llm_calls": 1,
+            "llm_wall_s": 23.56,
+            "llm_purposes": {
+              "rtl": 1
+            },
+            "checker_invalid": 2,
+            "simulation_rcs": []
+          }
+        },
+        {
+          "task": "Prob153_gshare",
+          "agent": {
+            "rc": 0,
+            "wall_s": 327.562,
+            "error": null
+          },
+          "judge_process": {
+            "rc": 0,
+            "wall_s": 10.186,
+            "error": null
+          },
+          "judge": {
+            "task_id": "Prob153_gshare",
+            "top": "TopModule",
+            "level": 1,
+            "coefficient": 0.2,
+            "stages": {
+              "compile": true,
+              "simulate": false,
+              "synth": false
+            },
+            "tool_error": null,
+            "elapsed_s": 10.1,
+            "mismatches": 577,
+            "samples": 1083
+          },
+          "total_wall_s": 337.749,
+          "solution_sha256": "2b56c7ddd66254c6c18b6d650f89d919d98664aa351efce9bf097078da5e9227",
+          "trace": {
+            "accepted": false,
+            "rounds": 5,
+            "model": {
+              "backend": "openai",
+              "model": "qwen2.5-coder-32b-instruct-q4_k_m.gguf",
+              "base_url": "http://127.0.0.1:8000/v1",
+              "max_tokens": 16384,
+              "temperature": 0.2,
+              "generation": {
+                "chat_template_kwargs": {
+                  "enable_thinking": false
+                }
+              }
+            },
+            "errors": [],
+            "events": 53,
+            "llm_calls": 5,
+            "llm_wall_s": 166.8,
+            "llm_purposes": {
+              "rtl": 5
+            },
+            "checker_invalid": 0,
+            "simulation_rcs": [
+              1,
+              1,
+              1,
+              1,
+              1
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
