@@ -373,11 +373,19 @@ def solve_agent(llm: LLM, trace: Trace, prompt: str, interface: str, top: str,
                                         checker_deadline - time.monotonic())
                     if review_budget <= 0:
                         raise ValueError("checker budget exhausted before review")
+                    frozen_checker = json.dumps(selftest.__dict__, sort_keys=True)
+                    checker_sha256 = hashlib.sha256(frozen_checker.encode()).hexdigest()
                     trace.write(tool="llm", purpose="selftest_review", event="start",
-                                attempt=checker_attempts)
-                    selftest = review_selftest(
+                                attempt=checker_attempts,
+                                checker_sha256=checker_sha256)
+                    reviewed = review_selftest(
                         llm, prompt, interface, contract, selftest,
                         timeout_s=review_budget, record=record_review)
+                    if json.dumps(reviewed.__dict__, sort_keys=True) != frozen_checker:
+                        raise ValueError("checker review changed the frozen payload")
+                    trace.write(tool="selftest", event="review_approved",
+                                attempt=checker_attempts,
+                                checker_sha256=checker_sha256)
                     rtl.record("selftest.json", json.dumps(selftest.__dict__,
                                ensure_ascii=False, indent=2))
                     trace.write(tool="selftest", event="generated",

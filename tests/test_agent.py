@@ -12,7 +12,7 @@ from agent import main, tools
 from agent.llm import LLM, LLMError, LLMResult, extract_code
 from agent.skills import load_skills, select
 from agent.spec_contract import extract_contract, check_semantics, repair_synchronous_events
-from agent.verification import SelfTest, generate_selftest, parse_selftest
+from agent.verification import SelfTest, generate_selftest, parse_selftest, review_selftest
 from agent.oracles import from_spec
 
 
@@ -253,6 +253,53 @@ class SelfTestTests(unittest.TestCase):
                     tools, "_run", side_effect=[(0, ""), (0, ""), (0, simulation)]):
                 self.assertEqual(rtl.simulate(GOOD, TEST.render(self.contract), 9)[0], expected)
 
+    def test_review_approval_preserves_checker_and_receives_spec_only(self):
+        llm = Mock()
+        llm.chat.return_value = LLMResult('```json\n{"approved":true,"issues":[]}\n```')
+        original = dict(TEST.__dict__)
+        record = Mock()
+        approved = review_selftest(llm, "AND specification", INTERFACE,
+                                   self.contract, TEST, 8, record=record)
+        self.assertIs(approved, TEST)
+        self.assertEqual(TEST.__dict__, original)
+        messages = llm.chat.call_args.args[0]
+        self.assertIn("AND specification", messages[1]["content"])
+        self.assertIn(TEST.stimulus.strip(), json.loads(
+            messages[1]["content"].split("Proposed checker:\n", 1)[1])["stimulus"])
+        self.assertNotIn("assign q", str(messages))
+        self.assertEqual(llm.chat.call_args.kwargs, dict(timeout_s=8, max_tokens=512))
+        record.assert_called_once()
+
+    def test_review_rejection_supplies_rebuild_feedback(self):
+        llm = Mock()
+        llm.chat.return_value = LLMResult(json.dumps({
+            "approved": False, "issues": ["Reset never spans a sampling edge"]}))
+        with self.assertRaisesRegex(ValueError, "Reset never spans a sampling edge"):
+            review_selftest(llm, "AND specification", INTERFACE, self.contract, TEST, 8)
+
+    def test_review_never_approves_malformed_or_conflicting_verdict(self):
+        for value in (None, {}, {"approved": "true", "issues": []},
+                      {"approved": 1, "issues": []},
+                      {"approved": True, "issues": ["Reset is wrong"]},
+                      {"approved": False, "issues": []},
+                      {"approved": True, "issues": [], "stimulus": "changed"},
+                      {"approved": False, "issues": [""]},
+                      {"approved": False, "issues": [1]},
+                      {"approved": False, "issues": ["x" * 501]},
+                      {"approved": False, "issues": ["problem"] * 5}):
+            with self.subTest(verdict=value), self.assertRaises(ValueError):
+                llm = Mock()
+                llm.chat.return_value = LLMResult(json.dumps(value))
+                review_selftest(llm, "AND specification", INTERFACE,
+                                self.contract, TEST, 8)
+
+    def test_review_truncation_never_becomes_approval(self):
+        llm = Mock()
+        llm.chat.return_value = LLMResult(
+            '{"approved":true,"issues":[]}', finish_reason="length")
+        with self.assertRaisesRegex(ValueError, "truncated"):
+            review_selftest(llm, "AND specification", INTERFACE, self.contract, TEST, 8)
+
 
 class SpecificationOracleTests(unittest.TestCase):
     def test_galois_oracle_derives_width_taps_and_seed_from_spec(self):
@@ -471,6 +518,46 @@ class AgentLoopTests(unittest.TestCase):
             finally:
                 trace.close()
         rtl.simulate.assert_not_called()
+
+    def test_review_rejection_rebuilds_independently_before_simulation(self):
+        rebuilt = SelfTest("", TEST.stimulus +
+                           '\na=0; b=1; #1; check(q,0,1,"added mixed input");',
+                           "Includes a=0 and b=1")
+        llm = Mock(backend="openai")
+        llm.chat.side_effect = [
+            LLMResult("```verilog\n" + GOOD + "```"),
+            LLMResult(json.dumps(TEST.__dict__)),
+            LLMResult('{"approved":false,"issues":["Cover a=0,b=1"]}'),
+            LLMResult(json.dumps(rebuilt.__dict__)),
+            LLMResult('{"approved":true,"issues":[]}'),
+        ]
+        rtl = Mock(available=True, simulation_available=True, reason="")
+        rtl.lint.return_value = (0, "compiled")
+        rtl.synth.return_value = (0, "Synthesis finished")
+        rtl.simulate.return_value = (0, "AGENT_SELFTEST_PASS checks=3")
+        with tempfile.TemporaryDirectory() as tmp:
+            trace = main.Trace(os.path.join(tmp, "trace.jsonl"))
+            try:
+                with patch.object(main, "RtlToolchain", return_value=rtl), \
+                        patch.object(main, "MAX_ROUNDS", 1):
+                    self.assertEqual(main.solve_agent(
+                        llm, trace, "q is a AND b", INTERFACE, "TopModule"), GOOD)
+            finally:
+                trace.close()
+            events = [json.loads(s) for s in Path(trace.path).read_text(
+                encoding="utf-8").splitlines()]
+        self.assertEqual(llm.chat.call_count, 5)
+        rtl.simulate.assert_called_once()
+        self.assertIn("added mixed input", rtl.simulate.call_args.args[1])
+        rebuild_request = llm.chat.call_args_list[3].args[0]
+        self.assertIn("Cover a=0,b=1", str(rebuild_request))
+        for call in llm.chat.call_args_list[1:]:
+            self.assertNotIn("assign q", str(call.args[0]))
+        starts = [e for e in events if e.get("purpose") == "selftest_review"
+                  and e.get("event") == "start"]
+        approvals = [e for e in events if e.get("event") == "review_approved"]
+        self.assertEqual(len(approvals), 1)
+        self.assertEqual(approvals[0]["checker_sha256"], starts[-1]["checker_sha256"])
 
 
 class BudgetTests(unittest.TestCase):

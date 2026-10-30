@@ -108,3 +108,7 @@ r8 为 600/240/60 秒，外层 635 秒。judge 均 120 秒。
 - 增加真实 Vivado 回归：带局部循环变量的相同 checker 应接受 AND DUT，拒绝 OR 变异；另有解析层正反例确保合法 automatic helper 和标签字符串不被误拒。
 
 Windows 本地为 Ran 69、OK、skipped=10。服务器 20 道新题继续使用固定的 `3369812` 快照；以上改动的 Linux/Vivado 验证须在该批完成后另记，不冒充已有题目通过率提升。
+
+进一步根据多题复核日志，将完整重写式审核改为严格短 verdict、冻结原 checker，
+拒绝则走独立重建；来源、实验依据及限制详见 `OPEN_SOURCE_PATTERNS.md`。
+本地对应回归为 Ran 74、OK、skipped=10；其服务器验证及真实模型结果待对应批次记录。

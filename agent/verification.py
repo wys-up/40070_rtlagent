@@ -15,6 +15,7 @@ from .llm import LLM, strip_think
 from .spec_contract import Contract
 
 SELFTEST_MAX_TOKENS = 2048
+REVIEW_MAX_TOKENS = 512
 from .tools import strip_comments
 
 
@@ -224,18 +225,56 @@ also test the off-edge effect explicitly.
 def review_selftest(llm: LLM, prompt: str, interface: str, contract: Contract,
                     test: SelfTest, timeout_s: float,
                     record=lambda result, elapsed: None) -> SelfTest:
-    """Review the oracle before it sees any DUT behavior; freeze it afterwards."""
-    instruction = (
-        "Independently audit this proposed checker against the ORIGINAL specification. "
-        "Return the complete corrected checker JSON, keeping valid tests. Check "
-        "especially: synchronous reset must span an active clock edge, off-edge "
-        "synchronous reset must NOT clear outputs, initialization before comparison, "
-        "old/new-state observation, MSB/LSB order, care masks and priorities. "
-        "Do not change expected values to fit an implementation: none is provided. "
-        "Ensure coverage includes boundary and mixed/nonuniform input values, not "
-        "only all-zero and all-one patterns. Do not merely repeat the coverage prose."
-    )
-    return generate_selftest(
-        llm, prompt, interface, contract, timeout_s,
-        previous_error=instruction,
-        previous_response=json.dumps(test.__dict__), record=record)
+    """Approve a frozen specification-only oracle or return reasons to rebuild it.
+
+    Reviewing must not rewrite the payload: full rewrites can silently remove
+    checks and consume the budget meant for RTL repair. A rejection still goes
+    through the existing independent generator/review loop, never simulation.
+    """
+    messages = [
+        {"role": "system", "content": """Independently audit a proposed SystemVerilog
+checker against the ORIGINAL specification. No DUT implementation is provided.
+Return ONLY JSON with exactly two fields: approved (boolean), issues (array of
+short strings). Do NOT rewrite the checker or provide RTL/testbench code.
+Approve only if the EXECUTED comparisons, not just coverage prose, derive from
+the specification and provide useful functional coverage. Check initialization,
+synchronous reset spanning an active edge, off-edge synchronous reset holding,
+asynchronous reset timing, old/new-state observation, output cycles, priorities,
+bit order, widths, care masks, helper syntax, and unknown initial states.
+For multi-input designs require mixed/nonuniform values and relevant boundaries;
+do not approve a checker that only checks zeros/ones or invents missing behavior.
+Declarations are module scoped; stimulus runs in an initialized named block.
+The controller provides input regs, output wires, DUT instance, watchdog and
+check(actual, expected, mask, label). No initial/always, DUT internals, verdict
+machinery or input/output redeclarations are allowed in the proposed fields.
+If correct: {"approved":true,"issues":[]}.
+Otherwise return approved=false with up to four concise, actionable issues,
+each at most 500 characters.
+An uncertain oracle must be rejected. Never adapt expectations to a DUT."""},
+        {"role": "user", "content": "Specification:\n" + prompt
+         + "\nInterface:\n" + interface
+         + "\nParsed contract:\n" + json.dumps(contract.to_dict(), ensure_ascii=False)
+         + "\nProposed checker:\n" + json.dumps(test.__dict__, ensure_ascii=False)},
+    ]
+    started = time.monotonic()
+    result = llm.chat(messages, timeout_s=timeout_s, max_tokens=REVIEW_MAX_TOKENS)
+    record(result, time.monotonic() - started)
+    if result.finish_reason == "length":
+        raise ValueError("checker review was truncated; no approval")
+    text = strip_think(result.text).strip()
+    fenced = re.fullmatch(r"```(?:json)?\s*\n(.*?)```\s*", text, re.S)
+    verdict = json.loads(fenced.group(1) if fenced else text)
+    if (not isinstance(verdict, dict) or set(verdict) != {"approved", "issues"}
+            or type(verdict["approved"]) is not bool
+            or not isinstance(verdict["issues"], list)
+            or len(verdict["issues"]) > 4
+            or any(not isinstance(issue, str) or not issue.strip() or len(issue) > 500
+                   for issue in verdict["issues"])):
+        raise ValueError("checker review must return approved boolean and up to four "
+                         "nonempty issues of at most 500 characters")
+    issues = verdict["issues"]
+    if verdict["approved"] and not issues:
+        return test
+    if not verdict["approved"] and issues:
+        raise ValueError("checker review rejected: " + "; ".join(issues)[:1500])
+    raise ValueError("checker review approval and issues are inconsistent")

@@ -103,6 +103,11 @@ Galois LFSR、gshare 和波形表使用程序化
 class helper 限定符；保留原有 checker 独立性、unknown 检查和完成判定。这类框架
 健壮性修正不等于真实题目通过率提升，须按源码版本另行验证。
 
+通用 checker 的独立复核只返回严格批准/问题清单，批准后冻结原 checker 并记录哈希；
+拒绝或响应无效时进入独立重建，不执行未经批准的 checker。复核不再重写整个测试台，
+输出单独上限为 512 token。借鉴 Pi、OpenCode、Hermes 的校验边界及错误反馈设计，
+精确源码版本、适用范围及待验收益记录在 `docs/OPEN_SOURCE_PATTERNS.md`。
+
 ## 5. 技能包
 
 技能包包含接口契约、通用时序，以及算术位宽、FSM 输出周期、gshare 分支预测、串行
