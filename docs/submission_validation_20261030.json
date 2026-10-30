@@ -26,10 +26,21 @@
     "docker_instructions_unchanged": true
   },
   "linux_final": {
-    "status": "pending"
+    "source_revision": "422b7e98540eb8a5ec843a335a82262feb6b4d86",
+    "started_utc": "2026-10-30T11:53:15.065228+00:00",
+    "rc": 0,
+    "wall_s": 88.218,
+    "source_archive_sha256": "44780ea9f1853ded784383087fb7f2ce08d1e0972073db4e30a0bc9b98c5667a",
+    "log_sha256": "35252e0bf344ad2511341134a5fdd63f7f9e2dc84d968f1f679d75eb8a00aaf8",
+    "status": "passed",
+    "tests": 83,
+    "passed": 83,
+    "skipped": 0,
+    "unittest_elapsed_s": 87.886,
+    "source_files_match_archive": true
   },
   "full_evaluation": {
-    "status": "pending_final_snapshot",
+    "status": "running",
     "total_tasks": 163,
     "groups": {
       "veval_clean": 145,
@@ -39,6 +50,26 @@
       "focused_development": 3
     },
     "samples_per_task": 1,
-    "baseline_run": false
-  }
+    "baseline_run": false,
+    "source_revision": "422b7e98540eb8a5ec843a335a82262feb6b4d86",
+    "started_utc": "2026-10-30T11:55:41.989794+00:00",
+    "inventory_sha256": "a06a97baab186f4a67bfecad9e7401f7e19081076b0b5a0b5497f993d7bcc46c",
+    "supervisor_sha256": "ee4bf2760ec1f6a470b5198242417b597f7b6b8e299dcb1318490efa71a60cdb",
+    "judge_sha256": "02238c62b598de5a835374b8dcbff9eebbeca7cd9fc01db8b5aad2d018882e10",
+    "limits": {
+      "agent_deadline_s": 900,
+      "outer_agent_s": 935,
+      "judge_s": 330
+    },
+    "output_directory": "outputs/full-all-existing-20261030",
+    "execution": "sequential, one fresh agent generation per task, independent judge",
+    "results_complete": false
+  },
+  "source_revision": "422b7e98540eb8a5ec843a335a82262feb6b4d86",
+  "unverified": [
+    "clean Docker image rebuild",
+    "end-to-end HTTP 900-second boundary",
+    "complete final-snapshot task pass rate",
+    "same-batch baseline comparison"
+  ]
 }
