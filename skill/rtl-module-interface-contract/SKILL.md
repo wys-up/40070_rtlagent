@@ -51,8 +51,8 @@ harder to attribute.
 ### Rule 2 — Every Declared Port Exists, Spelled the Same Way
 - The testbench connects by name (`.q(q_dut)`), not by position. A renamed port
   is a missing port.
-- Adding a port the interface does not declare is equally fatal: the instance
-  leaves it unconnected only if the testbench knows about it, and it does not.
+- Keep the port set exactly as specified. An extra port may elaborate unconnected,
+  but still violates the declared interface contract.
 - → If any declared port is missing, or any undeclared port is added,
   **Rule 2 FAIL**.
 
@@ -162,31 +162,8 @@ remaining problem is the logic.
 
 ## Output Format
 
-Respond with a structured analysis in this exact format:
-
-```
-### RTL Module Interface Contract Analysis
-
-**Declared interface:**
-- <module name and port list taken from the interface>
-
-**Module found in the generated code:**
-- <module name and port list actually declared, or "none">
-
-**Rule-by-Rule Evaluation:**
-
-| Rule | Description                                  | Result               |
-| ---- | -------------------------------------------- | -------------------- |
-| 1    | Module name matches exactly                  | PASS / FAIL (reason) |
-| 2    | All declared ports present, none added       | PASS / FAIL (reason) |
-| 3    | Directions and widths match                  | PASS / FAIL (reason) |
-| 4    | Module header parses                         | PASS / FAIL (reason) |
-| 5    | No testbench content in the file             | PASS / FAIL (reason) |
-
-**Verdict:** ✅ Contract satisfied / ❌ Contract violated
-**First failing rule:** <rule number and explanation>
-**Repair applied:** <the single edit made, or "none required">
-```
+Follow the caller's output contract. Use the checks internally; for RTL generation,
+return only the complete design in the requested code block.
 
 ---
 
@@ -199,7 +176,6 @@ Respond with a structured analysis in this exact format:
 - **Do not** remove `reg` from an output port to make it match the interface
   textually — `reg` is not part of the contract and removing it will break the
   `always` block that drives it.
-- Evaluate rules in order (1 → 5) and stop at the first failure for the repair,
-  but still report all five in the table.
+- Evaluate rules in order (1 → 5), repair the first failure, then recheck.
 - If no interface declaration was supplied, report all rules as N/A rather than
   guessing a module name.

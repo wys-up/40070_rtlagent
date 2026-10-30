@@ -1,151 +1,64 @@
-# serve/
+# 部署与投题服务
 
-推理服务与投题接口。两者跑在同一个实例里，互不干扰。
+推理服务监听 `127.0.0.1:8000`，投题接口监听 `127.0.0.1:7860`。
+仅通过平台隧道暴露投题接口。运行环境需已有 llama.cpp、Vivado 2026.1、
+模型权重、Python 依赖和有效 EDA 授权。
 
-```
-  8000   vllm.sh        llama.cpp 推理服务   绑 127.0.0.1，不暴露
-  7860   serve_api.py   投题接口   绑 127.0.0.1，经 rc-tunnel 对外
-```
+## 启动
 
----
-
-## 开发期：不需要 GPU
+在服务终端设置环境变量；`FPGACHINA_TOKEN` 由平台发放，须从仓库外的安全配置加载。
 
 ```bash
 export LLM_BACKEND=openai
-export LLM_BASE_URL=https://api.deepseek.com/v1     # 或任意 OpenAI 兼容端点
-export LLM_API_KEY=sk-xxxxxxxx
-export LLM_MODEL=deepseek-coder
-```
-
-无需启动 `vllm.sh`，`agent/llm.py` 将直接访问所配置的端点。
-
-## 正式提交：本地 GGUF 权重
-
-```bash
-MODEL_FILE=/models/qwen2.5-coder-32b-instruct-q4_k_m.gguf ./serve/start.sh
-
-export LLM_BACKEND=openai
-export LLM_BASE_URL=http://localhost:8000/v1        # 换成本机
-export LLM_API_KEY=dummy
-export LLM_MODEL=qwen2.5-coder-32b-instruct-q4_k_m.gguf
-```
-
-智能体代码无需改动，差异仅在于三个环境变量。但提示词与重试策略未必可以直接平移，商用
-API 与本地小模型在输出长度、指令遵循、代码格式稳定性上差异明显，围绕前者调好的东西
-换到后者常常直接失效。尽早跑一次本地模型。
-
-## 起投题接口
-
-```bash
-source /workspace/rtlagent-config/agent.env
-source /workspace/env.sh
+export LLM_BASE_URL=http://127.0.0.1:8000/v1
 export LLM_MODEL=qwen2.5-coder-32b-instruct-q4_k_m.gguf
 export MODEL_NAME="$LLM_MODEL"
+export MODEL_FILE=/models/qwen2.5-coder-32b-instruct-q4_k_m.gguf
+export LLM_API_KEY=dummy
+export AGENT_TMP=/var/tmp/agent
+export EDA_TMP=/var/tmp/eda
+
 bash serve/start.sh
 bash serve/run_api.sh start
 bash serve/run_api.sh check
+```
 
-# 检查通过后，安装（如缺少）并调用平台工具暴露端口，15 秒后显示隧道状态。
+`serve/vllm.sh` 实际启动 llama.cpp；兼容文件名不表示使用 vLLM。
+默认配置为 context 24576、单并发槽位、单卡运行，详见
+[模型声明](../model/MODEL.md)。模型端点不启用 `MODEL_API_KEY`，以兼容原版基线客户端；
+对外投题接口仍必须使用 `FPGACHINA_TOKEN` 鉴权。
+
+## 接口与隧道
+
+```bash
+curl --fail -H "Authorization: Bearer $FPGACHINA_TOKEN" \
+  http://127.0.0.1:7860/v1/health
+bash serve/run_api.sh tunnel-status
 bash serve/run_api.sh expose
 ```
 
-令牌保存在仓库外的 `/workspace/env.sh`，不要把真实令牌写入示例或提交 Git。
-`run_api.sh start` 用 `setsid` 在后台启动守护进程，接口进程异常退出后 2 秒重启；
-仅在无令牌请求为 401、带令牌请求为 200 且 `ready:true`、`track:rtl` 时报告成功。
-`check` 可单独检查，`status` 检查守护进程和接口健康，`stop` 停止投题服务。
-日志位于 `${AGENT_TMP:-/tmp}/run_api/serve_api.log`。
-
-`expose` 每次调用都可能产生新网址；已有 active 隧道时先运行
-`bash serve/run_api.sh tunnel-status` 查看，避免重复暴露。SSH 下此入口会补充
-平台工具所需的环境变量。接口中断约 1 分钟后，
-平台会收回隧道；服务恢复后必须再次执行 `expose` 并重新报送网址。
-实例重启后重新加载环境、启动模型与接口，再执行 `expose`。
-
-在自己的电脑上验证平台返回的网址（本机 `127.0.0.1` 指的是自己的电脑）：
-
-```powershell
-curl.exe --fail --max-time 20 --noproxy "*" `
-  -H "Authorization: Bearer $env:FPGACHINA_TOKEN" `
-  "$env:FPGACHINA_PUBLIC_URL/v1/health"
-```
-
-提前在本机环境中设置令牌和平台返回的公网根网址；预期 `ready:true`、`track:rtl`。
-远程终端的 `source` 不会改变本机电脑的环境变量。
-
-自测：
+健康检查应返回 `ready:true`、`track:"rtl"` 和实际模型名。`check` 同时验证
+未认证请求被拒绝。`expose` 依赖平台的 `rc-tunnel`；已有隧道时先检查状态，
+避免产生新网址。隧道失效后需重新暴露并向赛事方更新网址。
 
 ```bash
-curl -H "Authorization: Bearer $FPGACHINA_TOKEN" http://localhost:7860/v1/health
-# {"ready":true,"track":"rtl","model":"qwen2.5-coder-32b-instruct-q4_k_m.gguf","vram_gb":25.1}
-
-# 投一道题：立即返回 job_id，之后查询直到 status 为 done
-curl -X POST -H "Authorization: Bearer $FPGACHINA_TOKEN" -H "Content-Type: application/json" \
-     -d '{"task_id":"t1","nonce":"n1","mode":"agent","prompt":"...","interface":"","deadline_s":900}' \
-     http://localhost:7860/v1/solve
-curl -H "Authorization: Bearer $FPGACHINA_TOKEN" http://localhost:7860/v1/jobs/<job_id>
+curl --fail -X POST -H "Authorization: Bearer $FPGACHINA_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"task_id":"t1","nonce":"n1","mode":"agent","prompt":"...","interface":"","deadline_s":900}' \
+  http://127.0.0.1:7860/v1/solve
 ```
 
-`track` 必须是 `"rtl"`，赛事方投题前会核对，不符即拒投。
+接口返回 `job_id` 后，使用相同鉴权查询 `GET /v1/jobs/<job_id>`，直到 `status` 为
+`done`。单 worker 顺序处理任务；重复 nonce 复用已有任务。基线请求使用
+`mode:"baseline"`，访问相同的模型服务。
 
----
+## 日志与运行约束
 
-## 几处容易踩的地方
-
-**显存按 32 GB 预算，而不是按卡的容量。** 本方案使用 llama.cpp 单卡
-`-ngl 999 -c 24576 -np 1 -sm none`，在验证实例上实测稳态约 25.1 GiB；
-仍须在目标提交环境中重新测量，超过 32 GB 时不得继续使用该配置。
-
-**绑 `127.0.0.1`，不是 `0.0.0.0`。** Radeon Cloud 的 `rc-tunnel` 只接管绑在环回口上的
-HTTP 服务，绑 `0.0.0.0` 平台不接管。绑错了服务本身是活的，但外面永远打不进来，在赛事方
-那边看起来和挂掉没有区别，而失败不重投。
-
-**只暴露 7860 一个端口。** 平台限制一个 notebook 同时只能暴露一个端口。推理服务的 8000
-由智能体经 `127.0.0.1` 内部调用，不要去暴露。**同时参加两个赛道的队伍需要两台 VM。**
-
-**令牌检查不是可选项。** 平台给出的公网 app URL 不带业务层鉴权，没有令牌检查，任何人
-拿到网址都能投题。
-
-**工程与中间文件落本地目录。** `AGENT_TMP` 默认 `/tmp`；实例上 `/tmp` 是 4 GB 内存盘，请设为 `/var/tmp`。云平台的 `/workspace` 是 NFS，
-Vivado 综合产生的大量小文件写在上面极慢。这不是优化建议。
-
-**服务要能连续跑数百次请求不重启。** 评测期间挂了就是 L0，赛事方不重投。注意每题之后
-清理临时目录与子进程，别把磁盘写满。
-
-**投题是异步的。** `POST /v1/solve` 立即返回任务编号，题在后台解，赛事方每 2 秒查询一次。
-平台入口会切断 60 秒内没有响应的请求，所以自己改写投题服务时，不能让请求挂着等解题完成。
-
-**自己先超时，别让赛事方超时。** 900 秒包含排队、生成、检查、修复、清理和取回结果。
-agent 默认在第 870 秒停止工作并保留最好结果；`serve_api.py` 在第 880 秒对 `run.sh`
-整个进程组发 SIGTERM，最多等 5 秒后 SIGKILL，再最多用 3 秒回收进程，随后返回已有结果。
-赛事方侧超时一定是 L0，
-自己先停至少还有 L1/L2 的可能。要按进程组结束，是因为只杀 `run.sh` 一个进程时，它启动的
-智能体与 Vivado 会继续运行，和下一题争抢 GPU 与 CPU。
-完整预算、失败分支、契约核查与验证方法见
-[900 秒兜底方案](../docs/DEADLINE_FALLBACK.md)。
-
-**常驻进程只从 `start.sh` 起。** 推理服务与队伍自己的常驻引擎都写进 `start.sh`，用
-`setsid` 拉起。容器重建这条退路下，赛事方只运行 `start.sh` 再逐题调用 `run.sh`，不启动
-`serve_api.py`；超时信号发给 `run.sh` 的进程组，由 `run.sh` 在后台带起的常驻进程会随之
-被结束。详见 `docs/API_CONTRACT.md` 第八节。
-
-**进程要自己回收。** 平台实例的 1 号进程是 JupyterLab，它不回收孤儿进程，被结束的子进程
-会作为僵尸一直占着进程号，攒多了新进程就起不来。`serve_api.py` 启动时把自己设为回收者
-（`PR_SET_CHILD_SUBREAPER`），每题结束后回收该题的全部进程。换成自己的服务时这一段
-要保留。详见 `docs/API_CONTRACT.md` 第十节。
-
----
-
-## 跨代架构的已知问题
-
-验证阶段的 gfx1100（W7900）与决赛的 gfx1201（R9700）是两代架构，预编译内核与 wheel
-不通用。基础镜像里已给出可用配置，但以下几条应当知悉：
-
-1. **跨卡张量并行与流水并行在 gfx1201 上不可用**，无 XGMI，集合通信库无法可靠启动。
-   四卡的推荐用法是每卡一个独立实例、四路并发。
-2. **FP8 存在「硬件有、软件未必用得上」的情况。** gfx1201 具备 FP8 E4M3 矩阵指令，
-   但部分框架缺少该架构的平台检测，会将 FP8 权重静默反量化为 FP32，导致算力浪费，
-   而且没有任何告警。
-3. **部分算子库在 RDNA 4 上不工作**，须显式关闭。
-4. **在 gfx1100 上做 FP8 量化只省显存、不获加速**，该架构无 FP8 矩阵指令。验证阶段
-   测到的量化收益不能直接外推到决赛。
+- `serve/run_api.sh status` 查看状态，`stop` 停止投题服务；日志位于
+  `${AGENT_TMP:-/tmp}/run_api/serve_api.log`。
+- 常驻进程由 `start.sh` 独立启动；`run.sh` 仅处理单题。单题进程组终止不应结束模型。
+- 临时 EDA 目录使用本地盘；完成后清理，避免在网络存储中保留 Vivado 中间文件。
+- 900 秒包含排队和取回结果；工作预算与进程回收见
+  [时限说明](../docs/DEADLINE_FALLBACK.md)。
+- 接口任务表保存在内存。服务重启会丢失已有 job，守护脚本重启不能恢复在途评分任务。
+- Docker 构建方式与单题入口见[设计报告](../REPORT.md)。

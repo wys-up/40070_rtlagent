@@ -1,0 +1,44 @@
+{
+  "audit_date": "2026-10-30",
+  "windows": {
+    "command": "python -m unittest discover -s tests -v",
+    "tests": 78,
+    "passed": 68,
+    "skipped": 10,
+    "elapsed_s": 2.605,
+    "log_sha256": "c35126de76fdb2c1e4d2665e8dbe466e1c836071f248f7db9461aa0c2a7246bb"
+  },
+  "skills": {
+    "count": 7,
+    "validator": "skill-creator/scripts/quick_validate.py",
+    "all_valid": true,
+    "dependency_location": "ignored outputs directory only"
+  },
+  "static_checks": {
+    "python_compile": true,
+    "json_parse": true,
+    "markdown_relative_links": true,
+    "markdown_block_fences": true,
+    "baseline_original": true,
+    "api_contract_original": true,
+    "runtime_fixed_pattern_scan": true,
+    "python_executable_ast_unchanged_since": "9c2fa34",
+    "docker_instructions_unchanged": true
+  },
+  "linux_final": {
+    "status": "pending"
+  },
+  "full_evaluation": {
+    "status": "pending_final_snapshot",
+    "total_tasks": 163,
+    "groups": {
+      "veval_clean": 145,
+      "veval_restored": 1,
+      "examples": 6,
+      "boundary_development": 8,
+      "focused_development": 3
+    },
+    "samples_per_task": 1,
+    "baseline_run": false
+  }
+}

@@ -1,75 +1,24 @@
-# 开源 agent 实现借鉴记录
+# 开源实现参考
 
-本记录对应本地已下载源码的只读审查，2026-10-30。最终包中的实现面向比赛的
-公开题面、接口、独立 checker 和 Vivado 流程；借鉴的是校验边界与反馈方式。
+以下源码只读用于研究校验与错误恢复边界，未引入对应框架的运行依赖。
 
-## 可追溯来源
-
-| 项目 / revision | 源码位置 | 借鉴的边界 |
+| 项目 / revision | 源码位置 | 参考机制 |
 | --- | --- | --- |
-| Pi / `74f46864025c68504cd10c89eeb626b7e3d64cea` | `packages/agent/src/agent-loop.ts:735–784`、`packages/ai/src/utils/validation.ts:317–352` | 工具输入先校验，通过后传递已校验参数，失败转成明确错误供修正 |
-| OpenCode / `c7a59b7703db31ebf459fa3e37ffbeb6e1cfa257` | `packages/core/src/tool/runtime.ts:64–101` | schema 校验与执行分离，返回有界、具体的字段问题 |
-| Hermes / `92663ae8054ae81f207f46d83512d3f879dc698d` | `agent/turn_tool_validation.py:178–228` | 截断 JSON 不进入执行，解析错误以具体反馈进入有界恢复 |
+| Pi / `74f46864025c68504cd10c89eeb626b7e3d64cea` | `packages/agent/src/agent-loop.ts:735–784`、`packages/ai/src/utils/validation.ts:317–352` | 先校验工具输入，通过后执行；错误作为具体反馈 |
+| OpenCode / `c7a59b7703db31ebf459fa3e37ffbeb6e1cfa257` | `packages/core/src/tool/runtime.ts:64–101` | schema 校验与执行分离 |
+| Hermes / `92663ae8054ae81f207f46d83512d3f879dc698d` | `agent/turn_tool_validation.py:178–228` | 拒绝截断 JSON；保留原请求及随后校验反馈 |
 
-这些框架没有在此处实现 RTL checker reviewer；本仓库将相同边界思想应用到
-`agent/verification.py::review_selftest` 和现有的独立重建循环，没有引入其运行时依赖。
+## 实现映射
 
-## 对应的共性问题
+- `agent/verification.py` 的 checker 生成与复核只接收公开规格、接口和 checker，
+  不接收候选 RTL 或官方参考。复核返回严格批准/问题清单，不重写已冻结的 checker。
+- 批准前后记录同一哈希；拒绝时携原响应和具体问题独立重建，未经批准不执行。
+- 生成器最多三次构造；完整 checker 与复核分别最多 2048 / 512 输出 token。
+  解析错误、协议冲突和 length 截断均拒绝。
+- stimulus 作用域禁止遮蔽 DUT 端口及不支持的声明类型；coverage 仅为说明字段。
+  检查直接放在 stimulus，期望值未知或零比较不能形成通过。
+- 程序化路径仅转换本次题面显式表格与波形，不包含预置电路算法。
 
-开发中一次只读抽样分析发现：11 次已完成的完整重写式 checker 复核共耗时
-363.61 秒，单次 22.18–48.38 秒；其中 3 次将可解析的生成结果改成缺少 `check()`
-的无效结果，发生于 Prob038 第一次复核、Prob027 第二与第三次复核。
-来源为 r11 broad/new20 的 `selftest-response-*.txt`、`selftest-review-*.txt` 和 JSONL。
-这是对复核器的诊断，不是题目通过率或全题集统计。
-
-## 本包实现
-
-1. 生成器继续输出完整 checker；reviewer 只看原规格、接口、契约及该 checker，
-   返回严格的 `{"approved": boolean, "issues": [string]}`，不获取 DUT 实现。
-2. 批准必须为真正的 JSON 布尔值、空 issues，且无额外字段；拒绝须有 1–4 个
-   非空问题，每个至多 500 字符。未知字段、冲突 verdict、解析错误及 length 截断均不批准。
-3. 批准后冻结原 checker。控制器记录复核前后相同的 checker 哈希，若复核改变产物则拒绝。
-   拒绝时由现有独立生成器携原 checker 和具体问题重新生成，再审核；未批准不运行。
-4. 复核输出上限独立设为 512 token，完整 checker 仍为 2048；每次调用继续共享既有墙钟预算。
-5. 批准不等于 RTL 通过。后续仍须完成 Vivado 仿真，具有非零比较、无 unknown oracle、
-   无失配且有完整通过标志；官方 judge 继续独立运行。
-
-当前只确认本地协议、冻结、拒绝重建和防止未审核执行的回归通过；真实模型速度、
-checker 有效率与官方通过率应在对应提交的服务器批次中验证。缩小输出上限本身不是收益证据。
-
-本轮没有增加插件系统、凭据管理、外部检索、多模型路由等与 RTL 比赛无关的功能。
-独立 stub 的 checker 预编译是后续候选方向，其工具成本和收益尚未实测，未纳入本次实现。
-
-## stimulus 作用域复核
-
-独立刺激块使局部变量声明合法，同时也需要防止局部变量遮蔽控制器 DUT 端口。
-解析器拒绝与端口同名的普通变量声明，覆盖嵌套块及 for 初始化；按括号/索引/拼接深度
-识别声明分隔符，避免把初始化函数参数中的输入名误认成新声明。模型 checker 全体
-明确不支持 typedef/enum/struct/class 等自定义类型，使用内建 reg/integer/localparam
-参考模型；stimulus 内 foreach、局部常量等也拒绝，常量移到 declarations 字段。
-packed width 中的嵌套索引用平衡括号处理；字符串/注释之外的 escaped identifier 拒绝。
-这是一种受限语法边界，不声称实现完整 SystemVerilog 作用域分析。清理后的程序化
-路径仅逐行转换当前题面的显式表格/波形，不再包含按电路类型预置的算法参考模型；
-模型生成的 checker 仍须通过上述受限声明解析及独立复核。
-
-## 生成器的错误反馈
-
-继续汇总 r11 各题和 r12 已完成两题的日志，发现重复的协议错误：
-检查调用放入不执行的 coverage 字段或 helper、actual 未观察 DUT 输出，
-以及标签中使用不支持的 `$time`。其中 r12 半加器三次响应完全相同；
-双边沿检测三次仍把检查放在 coverage 中。这是跨题的生成协议问题，
-与官方功能失配分开统计。
-
-沿用 Pi/Hermes 中“保留先前工具请求、随后反馈具体校验错误”的恢复思路：
-独立生成器以 assistant 消息保存先前 checker，紧跟 user 校验反馈，
-避免把错误写在整段坏响应之前、让重复输出成为最后一段上下文。
-这里只使用已有 chat 消息和最多三次构造机会，不增加工具调度框架。
-提示明确 check 调用直接放 stimulus、coverage 只写说明、标签用计数器；
-不改变 oracle 期望值、不执行 coverage，也不放宽 parser 的接受条件。
-即使响应碰巧为可解析 JSON，generation 的 length 截断也明确拒绝。
-
-对应回归覆盖坏响应的角色与反馈顺序、规格隔离和截断拒绝。
-Windows 虚拟环境执行 Ran 78、OK、skipped=10；Linux/Vivado 及真实模型
-验证另记。系统默认 Python 缺少 requests/fastapi，首次用它运行的测试失败；
-切换项目已有 `.venv/Scripts/python.exe` 后通过，没有因此修改依赖或跳过错误。
-以上是协议修正，尚不声称改善真实题目通过率或 ReadTimeout。
+上述边界由协议、冻结、拒绝重建和 Vivado 集成回归验证。
+开源框架本身未实现本方案的 RTL checker；这里参考的是通用设计机制。
+真实题目效果见对应固定版本的验证记录，不能从输出上限或协议测试推断通过率收益。

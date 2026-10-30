@@ -1,40 +1,8 @@
-"""Skill pack loading and selection.
+"""Load SKILL.md files and select at most two skills per generation round.
 
-Follows the format of AMD's official Vitis HLS agent skills, so a skill from
-that pack can be dropped into skill/ and used unchanged:
-
-    ---
-    name: hls-flattenable
-    description: one line, no block scalar
-    ---
-
-    <!-- copyright -->
-
-    # Agent Skill: ...
-
-    ## Skill Metadata
-    - **Name:** ...
-    - **Description:** ...
-    - **Trigger:** prose, when a human would reach for this
-    - **Log signatures:** `HLS 214-157`, `undefined symbol`      <- see below
-
-Front matter carries `name` and `description` only. Everything else lives in the
-body, which is why the loader reads the Skill Metadata bullets.
-
-`**Log signatures:**` is an addition, not part of the official format. Official
-skills are selected by an agent that has read their descriptions; this agent
-selects by matching tool output, and prose triggers ("User asks whether loops are
-flattenable") do not appear in a synthesis log. Backticked items on that line are
-matched literally against the log. A skill without the line is still loaded and
-can still be selected by name -- it just never auto-fires on an error.
-
-Selection is deliberately dumb. A model-driven router would be more flexible but
-costs a round trip, and a wrong route is expensive under a wall clock budget.
-Start dumb; earn the complexity.
-
-Injecting every skill every round is the failure mode to avoid. Skill bodies run
-to thousands of tokens; five of them crowd out the error log they are meant to
-help interpret.
+Front matter supplies name and description. Backticked Log signatures are
+matched case-insensitively against the task statement and previous tool feedback.
+A broad sequential-timing fallback has lower priority than direct matches.
 """
 
 from __future__ import annotations

@@ -1,24 +1,8 @@
-"""LLM backend.
+"""OpenAI-compatible client for the declared local inference service.
 
-Two backends, one code path:
-
-    LLM_BACKEND=mock      no network, no key. Returns a canned stub derived from
-                          the interface. Use this to verify the run.sh contract
-                          and the judging pipeline without a GPU or an API key.
-
-    LLM_BACKEND=openai    any OpenAI-compatible /chat/completions endpoint.
-                          This covers BOTH a commercial API bought by the team
-                          (development only) AND a local vLLM server (what the
-                          submission must actually use).
-
-    development   LLM_BASE_URL=https://api.deepseek.com/v1
-    local model   LLM_BASE_URL=http://localhost:8000/v1
-
-Only the environment variables change; the agent does not.
-
-NOTE FOR SUBMISSION: the final run happens in an offline sandbox. MODEL.md must
-declare locally deployable open weights. A commercial API fails conditions 2.1
-and 2.3 of the scoring rules and produces no run-based score at all.
+The mock backend is a zero-output interface stub for infrastructure tests.
+Submission runs use LLM_BACKEND=openai with a local llama.cpp endpoint.
+Agent and baseline read the same generation settings from manifest.json.
 """
 
 from __future__ import annotations

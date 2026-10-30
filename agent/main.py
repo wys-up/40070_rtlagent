@@ -91,12 +91,12 @@ def _with_note(note: str, log: str) -> str:
     """把接口提示并进工具日志，一起喂给下一轮。
 
     题面推出来的端口清单只作提示、不拦截（见 tools.check_interface），但提示
-    必须跟到下一轮的上下文里 —— 只写进 trace 不喂回去，等于查了个寂寞。
+    必须同时传递到下一轮上下文，不能只记录在 trace 中。
     """
     return f"{note}\n\n{log}" if note else log
 
 
-# 基线由赛事方的 ../baseline.py 实现，不在此处。
+# 基线由仓库根目录中保持原样的 baseline.py 实现。
 
 
 def save_solution(path: str, code: str) -> None:
