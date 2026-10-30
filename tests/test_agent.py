@@ -101,6 +101,16 @@ class InterfaceAndContractTests(unittest.TestCase):
         skills = select(load_skills(main.SKILL_DIR), "Reset is active-low synchronous.")
         self.assertIn("rtl-sequential-timing", [s.name for s in skills])
 
+    def test_prompts_preserve_behavior_and_cover_rtl_timing_hazards(self):
+        root = Path(main.ROOT)
+        system = (root / "agent/prompts/system.md").read_text(encoding="utf-8")
+        repair = (root / "agent/prompts/repair.md").read_text(encoding="utf-8")
+        for phrase in ("Moore", "Galois", "p-1", "gshare", "PHT",
+                       "每个 data bit", "错误 stop"):
+            self.assertIn(phrase, system)
+        self.assertIn("保持原有状态转移条件", repair)
+        self.assertIn("行为等价", repair)
+
     def test_dangerous_warning_filter_and_summary(self):
         log = ("WARNING: [VRFC 10-3705] select index 255 is out of bounds\n"
                "CRITICAL WARNING: [Synth 8-6859] multi-driven net count\n"
