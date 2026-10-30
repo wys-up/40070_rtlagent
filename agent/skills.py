@@ -54,17 +54,22 @@ class Skill:
         self.path = path
 
     def matches(self, *texts: str) -> bool:
+        return self.match_score(*texts)[0] > 0
+
+    def match_score(self, *texts: str) -> tuple[int, int]:
         if not self.signatures:
-            return False
+            return (0, 0)
         haystack = "\n".join(t.lower() for t in texts if t)
-        if any(sig.lower() in haystack for sig in self.signatures):
-            return True
+        hits = [sig for sig in self.signatures if sig.lower() in haystack]
+        if hits:
+            return (2 + len(hits), max(map(len, hits)))
         if self.name == "rtl-sequential-timing":
-            return bool(re.search(
+            broad_match = bool(re.search(
                 r"\b(?:synchronous|asynchronous|posedge|negedge|moore|mealy|"
                 r"state machine|finite.state|clock edge|rising edge|falling edge|"
                 r"serial|counter|shift register)\b", haystack))
-        return False
+            return (1, 0) if broad_match else (0, 0)
+        return (0, 0)
 
     def render(self, budget: int = 12000) -> str:
         return f'<skill name="{self.name}">\n{_trim(self.body, budget)}\n</skill>'
@@ -100,7 +105,10 @@ def load_skills(skill_dir: str) -> list[Skill]:
 
 
 def select(skills: list[Skill], *context: str, limit: int = 2) -> list[Skill]:
-    return [s for s in skills if s.matches(*context)][:limit]
+    matched = [(s.match_score(*context), s) for s in skills]
+    matched = [(score, skill) for score, skill in matched if score[0] > 0]
+    matched.sort(key=lambda item: (-item[0][0], -item[0][1], item[1].name))
+    return [skill for _, skill in matched[:limit]]
 
 
 # ------------------------------------------------------------- truncation

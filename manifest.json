@@ -55,7 +55,12 @@
     ],
     "skills": [
       "rtl-module-interface-contract",
-      "rtl-sequential-timing"
+      "rtl-sequential-timing",
+      "rtl-arithmetic-widths",
+      "rtl-fsm-output-timing",
+      "rtl-branch-predictor",
+      "rtl-serial-receiver",
+      "rtl-shift-register-pattern"
     ]
   }
 }
