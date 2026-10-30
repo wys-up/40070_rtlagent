@@ -11,7 +11,7 @@ SPDX-License-Identifier: MIT
 # RTL sequential timing
 
 - **Trigger:** clock edges, sampled inputs, registered outputs, reset, FSMs, counters, pipelines or overlapping occurrences.
-- **Log signatures:** `Mismatches:`, `synchronous reset`, `asynchronous reset`, `registered output`, `sampled on the positive edge`, `sampled on the negative edge`, `overlapping`, `four most recent input bits`
+- **Log signatures:** `synchronous reset`, `asynchronous reset`, `registered output`, `sampled on the positive edge`, `sampled on the negative edge`, `overlapping`, `four most recent input bits`
 
 ## Temporal contract
 

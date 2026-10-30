@@ -19,6 +19,10 @@ REVIEW_MAX_TOKENS = 512
 from .tools import strip_comments
 
 
+class CheckerReviewRejected(ValueError):
+    """A valid review found specification or coverage errors in the checker."""
+
+
 @dataclass
 class SelfTest:
     declarations: str
@@ -248,13 +252,17 @@ All vector arguments are zero-extended to at least 1024 bits. Use explicitly siz
 masks for the output bits being compared. Each call must check at least one bit.
 declarations: reference variables, localparams and helper tasks/functions only.
 Use built-in reg/integer types and localparams, not typedef/enum/struct/classes.
-Helpers are module scoped, not class methods: use task automatic tick; begin
+Helpers are module scoped, not class methods: use task automatic settle; begin
 #1; end endtask. Never use local/protected/virtual task or function qualifiers.
+This settle helper only delays; it does NOT advance a clock. For clocked
+specifications drive the declared clock explicitly through each sampling edge,
+including reset, and sample after a settling delay. A helper named tick must
+actually drive those clock transitions, not just wait.
 End a standalone delay with a semicolon: #1; before end/endtask/endfunction.
 NEVER redeclare the input/output ports; their exact names and widths are in the
 parsed contract. Declare all helper variables here, not halfway through a block.
-Every helper task must be declared as `task automatic`; do not use non-automatic
-tasks with `ref` arguments. Do not declare integer/reg/logic variables inside
+Every helper task must be declared as task automatic (no backticks in code).
+Do not use non-automatic tasks with ref arguments. Do not declare variables inside
 stimulus blocks or loops.
 stimulus: statements INSIDE an existing initial begin/end; no initial/module.
 Put every check(...) call directly in stimulus, interleaved with input driving
@@ -281,6 +289,13 @@ derive the reference next-state equations from those explicit requirements.
 Do not compare unspecified initial states or don't-care bits. If an oracle cannot
 be derived reliably, put the reason in uncertainties and do not invent expected
 values. Keep the test bounded to at most 2048 cycles, avoid huge unrolled code.
+For signed arithmetic, interpret input bit patterns with $signed and use signed,
+widened reference intermediates through both arithmetic and comparisons. Derive
+the bounds from the specification; do not wrap a reference sum before clamping.
+Keep the complete JSON below 1800 tokens. Prefer bounded loops and compact
+reference expressions over repeated stimuli. Use short labels and concise
+coverage/uncertainties; do not spend the output budget on comments or prose.
+Never shorten a checker by removing all comparisons or required behavior.
 Use ordinary Verilog syntax (integer, reg, explicit widths) in the body.
 CRITICAL: A synchronous reset must be asserted THROUGH an active clock edge.
 The sequence "#1 reset=1; #1 reset=0;" without a clock edge does NOT reset a DUT.
@@ -304,6 +319,9 @@ also test the off-edge effect explicitly.
                          "with declarations, stimulus, coverage and uncertainties. "
                          "Put executable check(...) calls directly in stimulus; "
                          "coverage is prose only. Do not repeat the reported error.\n"
+                         "If the request timed out or was truncated, start a shorter "
+                         "complete checker using bounded loops, short labels and no "
+                         "comments. Do not repeat a long unrolled response.\n"
                          "Validation feedback:\n" + previous_error})
     started = time.monotonic()
     result = llm.chat(messages, timeout_s=timeout_s,
@@ -317,7 +335,8 @@ also test the off-edge effect explicitly.
 
 def review_selftest(llm: LLM, prompt: str, interface: str, contract: Contract,
                     test: SelfTest, timeout_s: float,
-                    record=lambda result, elapsed: None) -> SelfTest:
+                    record=lambda result, elapsed: None,
+                    previous_error: str = "") -> SelfTest:
     """Approve a frozen specification-only oracle or return reasons to rebuild it.
 
     Reviewing must not rewrite the payload: full rewrites can silently remove
@@ -334,6 +353,11 @@ the specification and provide useful functional coverage. Check initialization,
 synchronous reset spanning an active edge, off-edge synchronous reset holding,
 asynchronous reset timing, old/new-state observation, output cycles, priorities,
 bit order, widths, care masks, helper syntax, and unknown initial states.
+Apply only requirements established by this specification. Do not require
+asynchronous-reset behavior from a synchronous design, or clocked stimulus for
+an explicitly combinational task with an unused clock port. A delay-only helper
+does not create clock edges. Check executed assignments, not helper names or
+coverage claims. For signed references check widths and signed comparisons.
 For multi-input designs require mixed/nonuniform values and relevant boundaries;
 do not approve a checker that only checks zeros/ones or invents missing behavior.
 Declarations are module scoped; stimulus runs in an initialized named block.
@@ -349,6 +373,12 @@ An uncertain oracle must be rejected. Never adapt expectations to a DUT."""},
          + "\nParsed contract:\n" + json.dumps(contract.to_dict(), ensure_ascii=False)
          + "\nProposed checker:\n" + json.dumps(test.__dict__, ensure_ascii=False)},
     ]
+    if previous_error:
+        messages.append({"role": "user", "content":
+                         "The previous review request failed; the checker is unchanged. "
+                         "Return only the required approval JSON, with short issues. "
+                         "Do not rewrite the checker.\nReview protocol error: "
+                         + previous_error[:1000]})
     started = time.monotonic()
     result = llm.chat(messages, timeout_s=timeout_s, max_tokens=REVIEW_MAX_TOKENS)
     record(result, time.monotonic() - started)
@@ -369,5 +399,6 @@ An uncertain oracle must be rejected. Never adapt expectations to a DUT."""},
     if verdict["approved"] and not issues:
         return test
     if not verdict["approved"] and issues:
-        raise ValueError("checker review rejected: " + "; ".join(issues)[:1500])
+        raise CheckerReviewRejected(
+            "checker review rejected: " + "; ".join(issues)[:1500])
     raise ValueError("checker review approval and issues are inconsistent")

@@ -6,7 +6,7 @@ description: Implement cycle-accurate serial frame receivers with exact start, d
 # Serial frame receiver timing
 
 - **Trigger:** serial receiver, UART receiver, start bit, stop bit, received byte or serial frame.
-- **Log signatures:** `serial receiver`, `UART`, `start bit`, `stop bit`, `received byte`, `fsm_serial`, `Mismatches:`
+- **Log signatures:** `serial receiver`, `UART`, `start bit`, `stop bit`, `received byte`, `fsm_serial`
 
 - Make a cycle table for start, each data bit, and stop. Count and sample every data bit, including the terminal bit (bit 7 in an eight-bit frame), before testing STOP.
 - Frame progress depends on the number of sampling edges, never on whether a data bit is 0 or 1. Exercise all-zero bytes and nonuniform bytes to expose conditional counter updates.

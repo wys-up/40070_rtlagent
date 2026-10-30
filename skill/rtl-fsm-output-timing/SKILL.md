@@ -6,7 +6,7 @@ description: Preserve Moore and Mealy output cycles, state transitions, and sing
 # FSM output timing
 
 - **Trigger:** Moore/Mealy outputs, FSM state transitions, registered status signals or a cycle mismatch around a state change.
-- **Log signatures:** `Moore`, `Mealy`, `state machine`, `finite-state`, `FSM`, `state transition`, `output cycle`, `Mismatches:`
+- **Log signatures:** `Moore`, `Mealy`, `state machine`, `finite-state`, `FSM`, `state transition`, `output cycle`
 
 - Write a transition/output table from the specification before choosing an encoding. Record the state before the edge, sampled inputs, next state, and output visible after the edge.
 - A Moore output is usually decoded from the registered current state. Use next-state decode only when the required observable cycle says the output changes with that transition; do not add an output register that adds a cycle.

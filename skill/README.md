@@ -1,7 +1,8 @@
 # RTL 技能包
 
-技能按题面与上一轮工具反馈路由，每次最多选择两条。`agent/skills.py` 对
-`Log signatures` 进行大小写不敏感的子串匹配，按命中数与签名长度排序；
+技能按题面与上一轮工具反馈路由；题面最多两条，再补工具反馈，总计最多三条。
+`agent/skills.py` 对 `Log signatures` 进行大小写不敏感的完整单词或短语匹配，
+短语允许换行，具体短语优先于单词，按短语命中数与签名长度排序；
 通用时序规则的宽泛匹配优先级较低。组合任务不注入通用时序技能。
 
 | 技能 | 适用范围 |
@@ -9,6 +10,7 @@
 | `rtl-module-interface-contract` | 模块名、端口、方向、位宽和接口修复 |
 | `rtl-sequential-timing` | 采样边沿、非阻塞赋值、输出周期、复位和重叠 |
 | `rtl-arithmetic-widths` | 算术位宽、符号扩展、进位、截断和边界值 |
+| `rtl-specification-tables` | 真值表、卡诺图的实际标签、变量顺序和有效格 |
 | `rtl-fsm-output-timing` | Moore/Mealy 输出周期、转移表与单一过程归属 |
 | `rtl-branch-predictor` | 按题面分析预测/训练索引、观察周期与并发优先级 |
 | `rtl-serial-receiver` | 串行帧采样、位序、完成信号与错误恢复 |

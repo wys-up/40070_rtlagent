@@ -21,7 +21,8 @@ from .tools import (RtlToolchain, check_interface, source_safety_warnings,
                     signed_arithmetic_warnings)
 from .tools import stop_active_tools, repair_output_declarations
 from .spec_contract import extract_contract, check_semantics, repair_synchronous_events
-from .verification import generate_selftest, review_selftest
+from .verification import (CheckerReviewRejected, generate_selftest,
+                           review_selftest)
 from .oracles import from_spec
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -34,12 +35,20 @@ DEADLINE_S = float(os.environ.get("AGENT_DEADLINE_S", "900"))
 # 为写出结果预留的余量。
 RESERVE_S = float(os.environ.get("AGENT_RESERVE_S", "30"))
 GENERATION_S = float(os.environ.get("AGENT_GENERATION_S", "240"))
-CHECKER_S = float(os.environ.get("AGENT_CHECKER_S", "90"))
+CHECKER_S = float(os.environ.get("AGENT_CHECKER_GENERATION_S",
+                               os.environ.get("AGENT_CHECKER_S", "150")))
+CHECKER_REVIEW_S = float(os.environ.get("AGENT_CHECKER_REVIEW_S", "45"))
+CHECKER_TOTAL_S = float(os.environ.get("AGENT_CHECKER_TOTAL_S", "240"))
+CHECKER_SIM_RESERVE_S = 30
 VALIDATION_RESERVE_S = float(os.environ.get("AGENT_VALIDATION_RESERVE_S", "180"))
 
 
 class BudgetExpired(Exception):
     """Stop work while the retained candidate can still be returned."""
+
+
+class RepeatedCheckerError(ValueError):
+    """An already rejected response cannot justify another review or simulation."""
 
 
 class Trace:
@@ -141,6 +150,7 @@ def solve_agent(llm: LLM, trace: Trace, prompt: str, interface: str, top: str,
     checker_attempts = 1 if selftest else 0
     checker_error = ""
     checker_response = json.dumps(selftest.__dict__) if selftest else ""
+    invalid_checkers: set[str] = set()
     if selftest:
         rtl.record("selftest.json", checker_response)
         trace.write(tool="selftest", event="generated", source="spec_parser",
@@ -183,10 +193,23 @@ def solve_agent(llm: LLM, trace: Trace, prompt: str, interface: str, top: str,
         trace.write(tool="llm", purpose="selftest", attempt=checker_attempts,
                     tokens_in=result.tokens_in, tokens_out=result.tokens_out,
                     elapsed_s=round(elapsed, 2), finish_reason=result.finish_reason)
+        if checker_fingerprint(checker_response) in invalid_checkers:
+            raise RepeatedCheckerError(
+                "repeated invalid checker; derive a different compact "
+                "reference and stimulus from the original specification")
+
+    def checker_fingerprint(response: str) -> str:
+        try:
+            canonical = json.dumps(json.loads(response), sort_keys=True)
+        except ValueError:
+            canonical = response.strip()
+        return hashlib.sha256(canonical.encode()).hexdigest()
 
     def record_review(result, elapsed) -> None:
-        rtl.record(f"selftest-review-{checker_attempts}.txt", result.text)
+        suffix = "" if review_attempt == 1 else f"-retry-{review_attempt}"
+        rtl.record(f"selftest-review-{checker_attempts}{suffix}.txt", result.text)
         trace.write(tool="llm", purpose="selftest_review", attempt=checker_attempts,
+                    review_attempt=review_attempt,
                     tokens_in=result.tokens_in, tokens_out=result.tokens_out,
                     elapsed_s=round(elapsed, 2), finish_reason=result.finish_reason)
 
@@ -370,17 +393,30 @@ def solve_agent(llm: LLM, trace: Trace, prompt: str, interface: str, top: str,
         # A broken checker is repaired independently of the RTL. The generator
         # never receives candidate code, official tests or reference solutions.
         sim_rc, sim_log = 2, checker_error
-        checker_deadline = min(deadline_at, time.monotonic() + 2 * CHECKER_S)
+        # Keep time for simulation and a subsequent RTL repair, rather than
+        # letting checker construction consume all remaining work time.
+        repair_reserve = min(VALIDATION_RESERVE_S, remaining() * 0.35)
+        checker_deadline = min(deadline_at - repair_reserve,
+                               time.monotonic() + CHECKER_TOTAL_S)
+        trace.write(tool="selftest", event="budget", round=rnd,
+                    generation_s=CHECKER_S, review_s=CHECKER_REVIEW_S,
+                    phase_s=round(max(0, checker_deadline - time.monotonic()), 3),
+                    repair_reserve_s=round(repair_reserve, 3))
         while min(remaining(), checker_deadline - time.monotonic()) > 5:
             if selftest is None:
                 if checker_attempts >= 3:
                     break
+                request_budget = min(
+                    remaining(), CHECKER_S,
+                    checker_deadline - time.monotonic()
+                    - CHECKER_REVIEW_S - CHECKER_SIM_RESERVE_S)
+                if request_budget < 30:
+                    checker_error = "insufficient budget to generate, review and simulate"
+                    break
                 checker_attempts += 1
-                checker_phase = "selftest"
                 request_started = time.monotonic()
+                previous_response, checker_response = checker_response, ""
                 try:
-                    request_budget = min(remaining(), CHECKER_S,
-                                         checker_deadline - time.monotonic())
                     trace.write(tool="llm", purpose="selftest", event="start",
                                 attempt=checker_attempts,
                                 timeout_s=round(request_budget, 3))
@@ -388,50 +424,90 @@ def solve_agent(llm: LLM, trace: Trace, prompt: str, interface: str, top: str,
                         llm, prompt, interface, contract,
                         timeout_s=request_budget,
                         previous_error=checker_error,
-                        previous_response=checker_response,
+                        previous_response=previous_response,
                         record=record_checker)
-                    review_budget = min(remaining(), CHECKER_S,
-                                        checker_deadline - time.monotonic())
-                    if review_budget <= 0:
-                        raise ValueError("checker budget exhausted before review")
-                    frozen_checker = json.dumps(selftest.__dict__, sort_keys=True)
-                    checker_sha256 = hashlib.sha256(frozen_checker.encode()).hexdigest()
-                    checker_phase = "selftest_review"
-                    request_started = time.monotonic()
-                    trace.write(tool="llm", purpose="selftest_review", event="start",
-                                attempt=checker_attempts,
-                                timeout_s=round(review_budget, 3),
-                                checker_sha256=checker_sha256)
-                    reviewed = review_selftest(
-                        llm, prompt, interface, contract, selftest,
-                        timeout_s=review_budget, record=record_review)
-                    if json.dumps(reviewed.__dict__, sort_keys=True) != frozen_checker:
-                        raise ValueError("checker review changed the frozen payload")
-                    trace.write(tool="selftest", event="review_approved",
-                                attempt=checker_attempts,
-                                checker_sha256=checker_sha256)
-                    rtl.record("selftest.json", json.dumps(selftest.__dict__,
-                               ensure_ascii=False, indent=2))
-                    trace.write(tool="selftest", event="generated",
-                                attempt=checker_attempts, coverage=selftest.coverage,
-                                uncertainties=selftest.uncertainties)
                 except (LLMError, ValueError) as exc:
                     if isinstance(exc, LLMError):
-                        trace.write(tool="llm", purpose=checker_phase, event="error",
+                        trace.write(tool="llm", purpose="selftest", event="error",
                                     attempt=checker_attempts, rc=1,
                                     elapsed_s=round(time.monotonic() - request_started, 2),
                                     excerpt=str(exc)[:500])
+                    if checker_response:
+                        invalid_checkers.add(checker_fingerprint(checker_response))
                     selftest = None
                     checker_error = str(exc)
                     trace.write(tool="selftest", event="invalid",
                                 attempt=checker_attempts, excerpt=checker_error)
+                    if isinstance(exc, RepeatedCheckerError):
+                        break
                     continue
+                frozen_checker = json.dumps(selftest.__dict__, sort_keys=True)
+                checker_sha256 = hashlib.sha256(frozen_checker.encode()).hexdigest()
+                approved = False
+                review_error = ""
+                for review_attempt in range(1, 3):
+                    review_budget = min(
+                        remaining(), CHECKER_REVIEW_S,
+                        checker_deadline - time.monotonic() - CHECKER_SIM_RESERVE_S)
+                    if review_budget < 5:
+                        checker_error = "checker budget exhausted before review"
+                        break
+                    request_started = time.monotonic()
+                    trace.write(tool="llm", purpose="selftest_review", event="start",
+                                attempt=checker_attempts, review_attempt=review_attempt,
+                                timeout_s=round(review_budget, 3),
+                                checker_sha256=checker_sha256)
+                    try:
+                        reviewed = review_selftest(
+                            llm, prompt, interface, contract, selftest,
+                            timeout_s=review_budget, record=record_review,
+                            previous_error=review_error)
+                        if json.dumps(reviewed.__dict__, sort_keys=True) != frozen_checker:
+                            raise CheckerReviewRejected(
+                                "checker review changed the frozen payload")
+                    except (LLMError, ValueError) as exc:
+                        if isinstance(exc, LLMError):
+                            trace.write(
+                                tool="llm", purpose="selftest_review", event="error",
+                                attempt=checker_attempts, review_attempt=review_attempt,
+                                rc=1, elapsed_s=round(
+                                    time.monotonic() - request_started, 2),
+                                excerpt=str(exc)[:500])
+                        checker_error = review_error = str(exc)
+                        trace.write(tool="selftest", event="invalid",
+                                    attempt=checker_attempts, phase="review",
+                                    review_attempt=review_attempt, excerpt=checker_error)
+                        if isinstance(exc, CheckerReviewRejected):
+                            if checker_response:
+                                invalid_checkers.add(checker_fingerprint(checker_response))
+                            selftest = None
+                            break
+                        continue
+                    approved = True
+                    trace.write(tool="selftest", event="review_approved",
+                                attempt=checker_attempts, review_attempt=review_attempt,
+                                checker_sha256=checker_sha256)
+                    rtl.record("selftest.json", frozen_checker)
+                    trace.write(tool="selftest", event="generated",
+                                attempt=checker_attempts, coverage=selftest.coverage,
+                                uncertainties=selftest.uncertainties)
+                    break
+                if not approved:
+                    if selftest is None:
+                        continue
+                    # Transport/protocol failures do not justify regenerating
+                    # an unchanged checker or executing it without approval.
+                    selftest = None
+                    break
             sim_rc, sim_log = rtl.simulate(
-                code, selftest.render(contract), timeout_s=min(remaining(), 120))
+                code, selftest.render(contract), timeout_s=min(
+                    remaining(), 120, max(0, checker_deadline - time.monotonic())))
             trace.write(tool="simulate", round=rnd, rc=sim_rc, excerpt=sim_log[:3000])
             if sim_rc != 2:
                 break
             checker_error = sim_log
+            if checker_response:
+                invalid_checkers.add(checker_fingerprint(checker_response))
             selftest = None
         if sim_rc == 0:
             retain(code, (1, 1, 1, 1, 1), rnd)

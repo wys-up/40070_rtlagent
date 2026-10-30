@@ -129,6 +129,40 @@ class InterfaceAndContractTests(unittest.TestCase):
         selected = select(skills, "Implement a right-shifting Galois LFSR with numbered taps.")
         self.assertEqual(selected[0].name, "rtl-shift-register-pattern")
 
+    def test_signatures_do_not_match_inside_identifiers_or_other_words(self):
+        arithmetic = next(s for s in load_skills(main.SKILL_DIR)
+                          if s.name == "rtl-arithmetic-widths")
+        for text in ("The output is assigned from this Karnaugh map.",
+                     "A signal named unsigned_result is connected.",
+                     "A resigned worker. No overflowed identifiers."):
+            with self.subTest(text=text):
+                self.assertFalse(arithmetic.matches(text))
+        for text in ("Use signed arithmetic.", "Use unsigned arithmetic.",
+                     "WARNING: [Synth 8-3295] truncation"):
+            with self.subTest(text=text):
+                self.assertTrue(arithmetic.matches(text))
+
+    def test_kmap_routes_literal_table_skill_with_wrapped_phrase(self):
+        skills = load_skills(main.SKILL_DIR)
+        for prompt in (
+                "The output is assigned according to this Karnaugh map. "
+                "The column labels are 00 11 01 10.",
+                "Implement the following truth\n table using the row labels."):
+            with self.subTest(prompt=prompt):
+                selected = select(skills, prompt)
+                self.assertEqual(selected[0].name, "rtl-specification-tables")
+                self.assertNotIn("rtl-arithmetic-widths", [s.name for s in selected])
+
+    def test_specific_phrase_precedes_several_incidental_single_words(self):
+        selected = select(load_skills(main.SKILL_DIR),
+                          "Use a truth table with signed and unsigned columns "
+                          "to specify overflow and truncation.")
+        self.assertEqual(selected[0].name, "rtl-specification-tables")
+
+    def test_generic_mismatch_does_not_select_an_unrelated_domain(self):
+        self.assertEqual(select(load_skills(main.SKILL_DIR),
+                                "Mismatches: 8. AGENT_MISMATCH actual=0 expected=1"), [])
+
     def test_prompts_preserve_behavior_and_cover_rtl_timing_hazards(self):
         root = Path(main.ROOT)
         system = (root / "agent/prompts/system.md").read_text(encoding="utf-8")
@@ -232,6 +266,17 @@ class SelfTestTests(unittest.TestCase):
         self.assertIn(str(rejected.exception), messages[-1]["content"])
         self.assertNotIn(previous, messages[1]["content"])
         self.assertNotIn("assign q", str(messages))
+
+    def test_timeout_recovery_requests_a_compact_complete_checker(self):
+        llm = Mock()
+        llm.chat.return_value = LLMResult(json.dumps(TEST.__dict__))
+        generate_selftest(
+            llm, "AND specification", INTERFACE, self.contract, 120,
+            previous_error="model request failed: ReadTimeout")
+        messages = llm.chat.call_args.args[0]
+        self.assertEqual([m["role"] for m in messages], ["system", "user", "user"])
+        self.assertIn("start a shorter complete checker", messages[-1]["content"])
+        self.assertNotIn("`", messages[0]["content"])
 
     def test_truncated_checker_is_rejected_even_if_json_is_complete(self):
         llm = Mock()
@@ -494,6 +539,8 @@ class AgentLoopTests(unittest.TestCase):
                 tail = [LLMResult(json.dumps(TEST.__dict__)),
                         LLMResult('{"approved":true,"issues":[]}')]
                 first = [LLMResult(json.dumps(TEST.__dict__))]
+                if phase == "selftest_review":
+                    tail = tail[1:]
                 llm.chat.side_effect = (
                     [LLMResult("```verilog\n" + GOOD + "```")]
                     + (first if phase == "selftest_review" else [])
@@ -521,6 +568,62 @@ class AgentLoopTests(unittest.TestCase):
                 self.assertEqual(errors[0]["purpose"], phase)
                 self.assertGreaterEqual(errors[0]["elapsed_s"], 0)
                 self.assertNotIn("tokens_out", errors[0])
+                self.assertEqual(llm.chat.call_count, 4)
+                if phase == "selftest_review":
+                    approvals = [c.args[0] for c in llm.chat.call_args_list[-2:]]
+                    for request in approvals:
+                        self.assertIn("Proposed checker:", str(request))
+                    self.assertIn("checker is unchanged", str(approvals[-1]))
+
+    def test_repeated_invalid_checker_is_not_reviewed_or_retried_again(self):
+        invalid = json.dumps(dict(declarations="", stimulus="#1;", coverage="none"))
+        llm = Mock(backend="openai")
+        llm.chat.side_effect = [
+            LLMResult("```verilog\n" + GOOD + "```"),
+            LLMResult(invalid), LLMResult(invalid)]
+        rtl = Mock(available=True, simulation_available=True, reason="")
+        rtl.lint.return_value = (0, "compiled")
+        rtl.synth.return_value = (0, "Synthesis finished")
+        with tempfile.TemporaryDirectory() as tmp:
+            trace = main.Trace(os.path.join(tmp, "trace.jsonl"))
+            try:
+                with patch.object(main, "RtlToolchain", return_value=rtl), \
+                        patch.object(main, "review_selftest") as review:
+                    self.assertEqual(main.solve_agent(
+                        llm, trace, "q is a AND b", INTERFACE, "TopModule"), GOOD)
+            finally:
+                trace.close()
+            events = [json.loads(s) for s in Path(trace.path).read_text(
+                encoding="utf8").splitlines()]
+        self.assertEqual(llm.chat.call_count, 3)
+        review.assert_not_called()
+        rtl.simulate.assert_not_called()
+        self.assertTrue(any("repeated invalid checker" in e.get("excerpt", "")
+                            for e in events))
+
+    def test_review_protocol_failures_retry_frozen_payload_without_regeneration(self):
+        llm = Mock(backend="openai")
+        llm.chat.side_effect = [
+            LLMResult("```verilog\n" + GOOD + "```"),
+            LLMResult(json.dumps(TEST.__dict__)),
+            LLMResult("not approval JSON"),
+            LLMResult('{"approved":true,"issues":[]}')]
+        rtl = Mock(available=True, simulation_available=True, reason="")
+        rtl.lint.return_value = (0, "compiled")
+        rtl.synth.return_value = (0, "Synthesis finished")
+        rtl.simulate.return_value = (0, "AGENT_SELFTEST_PASS checks=2")
+        with tempfile.TemporaryDirectory() as tmp:
+            trace = main.Trace(os.path.join(tmp, "trace.jsonl"))
+            try:
+                with patch.object(main, "RtlToolchain", return_value=rtl):
+                    self.assertEqual(main.solve_agent(
+                        llm, trace, "q is a AND b", INTERFACE, "TopModule"), GOOD)
+            finally:
+                trace.close()
+        rtl.simulate.assert_called_once()
+        self.assertEqual(llm.chat.call_count, 4)
+        requests = [c.args[0][1]["content"] for c in llm.chat.call_args_list[-2:]]
+        self.assertEqual(requests[0], requests[1])
 
     def test_functional_failure_is_repaired_with_counterexample(self):
         answer, saved, events, llm, rtl = self.run_agent(
@@ -629,6 +732,64 @@ class AgentLoopTests(unittest.TestCase):
 
 
 class BudgetTests(unittest.TestCase):
+    def test_checker_budgets_are_separate_and_leave_simulation_time(self):
+        clock = [100.0]
+        generated = Mock(return_value=TEST)
+        reviewed = Mock(return_value=TEST)
+
+        def generation(*args, **kwargs):
+            clock[0] += 110
+            return generated(*args, **kwargs)
+
+        def review(*args, **kwargs):
+            clock[0] += 20
+            return reviewed(*args, **kwargs)
+
+        llm = Mock(backend="openai")
+        llm.chat.return_value = LLMResult("```verilog\n" + GOOD + "```")
+        rtl = Mock(available=True, simulation_available=True, reason="")
+        rtl.lint.return_value = (0, "compiled")
+        rtl.synth.return_value = (0, "Synthesis finished")
+        rtl.simulate.return_value = (0, "AGENT_SELFTEST_PASS checks=2")
+        with tempfile.TemporaryDirectory() as tmp:
+            trace = main.Trace(os.path.join(tmp, "trace.jsonl"))
+            try:
+                with patch.object(main, "RtlToolchain", return_value=rtl), \
+                        patch.object(main.time, "monotonic", side_effect=lambda: clock[0]), \
+                        patch.object(main, "CHECKER_S", 150), \
+                        patch.object(main, "CHECKER_REVIEW_S", 45), \
+                        patch.object(main, "CHECKER_TOTAL_S", 240), \
+                        patch.object(main, "generate_selftest", side_effect=generation), \
+                        patch.object(main, "review_selftest", side_effect=review):
+                    self.assertEqual(main.solve_agent(
+                        llm, trace, "q is a AND b", INTERFACE, "TopModule",
+                        deadline_at=1000), GOOD)
+            finally:
+                trace.close()
+        self.assertEqual(generated.call_args.kwargs["timeout_s"], 150)
+        self.assertEqual(reviewed.call_args.kwargs["timeout_s"], 45)
+        self.assertEqual(rtl.simulate.call_args.kwargs["timeout_s"], 110)
+
+    def test_checker_not_started_without_review_and_simulation_budget(self):
+        llm = Mock(backend="openai")
+        llm.chat.return_value = LLMResult("```verilog\n" + GOOD + "```")
+        rtl = Mock(available=True, simulation_available=True, reason="")
+        rtl.lint.return_value = (0, "compiled")
+        rtl.synth.return_value = (0, "Synthesis finished")
+        with tempfile.TemporaryDirectory() as tmp:
+            trace = main.Trace(os.path.join(tmp, "trace.jsonl"))
+            try:
+                with patch.object(main, "RtlToolchain", return_value=rtl), \
+                        patch.object(main.time, "monotonic", return_value=100), \
+                        patch.object(main, "generate_selftest") as generated:
+                    self.assertEqual(main.solve_agent(
+                        llm, trace, "q is a AND b", INTERFACE, "TopModule",
+                        deadline_at=200), GOOD)
+            finally:
+                trace.close()
+        generated.assert_not_called()
+        rtl.simulate.assert_not_called()
+
     def test_truncated_module_never_becomes_fallback(self):
         self.assertEqual(extract_code("```verilog\nmodule TopModule(input a);\n```"), "")
         self.assertEqual(extract_code(

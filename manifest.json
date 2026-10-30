@@ -57,6 +57,7 @@
       "rtl-module-interface-contract",
       "rtl-sequential-timing",
       "rtl-arithmetic-widths",
+      "rtl-specification-tables",
       "rtl-fsm-output-timing",
       "rtl-branch-predictor",
       "rtl-serial-receiver",

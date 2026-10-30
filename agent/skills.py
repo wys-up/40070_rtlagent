@@ -1,7 +1,7 @@
 """Load SKILL.md files and select at most two skills per generation round.
 
 Front matter supplies name and description. Backticked Log signatures are
-matched case-insensitively against the task statement and previous tool feedback.
+matched as words or phrases against the task statement and previous tool feedback.
 A broad sequential-timing fallback has lower priority than direct matches.
 """
 
@@ -27,15 +27,29 @@ class Skill:
     def match_score(self, *texts: str) -> tuple[int, int]:
         if not self.signatures:
             return (0, 0)
-        haystack = "\n".join(t.lower() for t in texts if t)
-        hits = [sig for sig in self.signatures if sig.lower() in haystack]
+        haystack = "\n".join(t for t in texts if t)
+        hits = []
+        for signature in self.signatures:
+            words = signature.strip().split()
+            if not words:
+                continue
+            pattern = r"\s+".join(re.escape(word) for word in words)
+            if signature[0].isalnum():
+                pattern = r"(?<![A-Za-z0-9_])" + pattern
+            if signature[-1].isalnum():
+                pattern += r"(?![A-Za-z0-9_])"
+            if re.search(pattern, haystack, re.I):
+                hits.append(signature)
         if hits:
-            return (2 + len(hits), max(map(len, hits)))
+            phrases = [sig for sig in hits if len(sig.split()) > 1]
+            if phrases:
+                return (3 + min(len(phrases), 3), max(map(len, phrases)))
+            return (2, max(map(len, hits)))
         if self.name == "rtl-sequential-timing":
             broad_match = bool(re.search(
                 r"\b(?:synchronous|asynchronous|posedge|negedge|moore|mealy|"
                 r"state machine|finite.state|clock edge|rising edge|falling edge|"
-                r"serial|counter|shift register)\b", haystack))
+                r"serial|counter|shift register)\b", haystack, re.I))
             return (1, 0) if broad_match else (0, 0)
         return (0, 0)
 
