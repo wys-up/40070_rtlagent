@@ -15,6 +15,9 @@ def _check(name: str, value: int, width: int, label: str) -> str:
 
 
 def from_spec(prompt: str, contract: Contract) -> SelfTest | None:
+    gshare = _gshare(prompt, contract)
+    if gshare:
+        return gshare
     ports = contract.ports
     inputs = [(w, n) for d, w, n in ports if d == "input"]
     outputs = [(w, n) for d, w, n in ports if d == "output"]
@@ -137,6 +140,102 @@ end
                                 " ".join(hints))
     return (_state_table(prompt, contract) or _moore_arrows(prompt, contract)
             or _edge_capture(prompt, contract))
+
+
+def _gshare(prompt: str, contract: Contract) -> SelfTest | None:
+    normalized = re.sub(r"\s+", " ", prompt).lower()
+    required = ("gshare branch predictor", "train_mispredicted",
+                "prediction sees the pht state before training",
+                "training takes precedence")
+    if not all(phrase in normalized for phrase in required):
+        return None
+    expected = {
+        "clk": ("input", 1), "areset": ("input", 1),
+        "predict_valid": ("input", 1), "predict_pc": ("input", 7),
+        "predict_taken": ("output", 1), "predict_history": ("output", 7),
+        "train_valid": ("input", 1), "train_taken": ("input", 1),
+        "train_mispredicted": ("input", 1), "train_history": ("input", 7),
+        "train_pc": ("input", 7),
+    }
+    actual = {name: (direction, width) for direction, width, name in contract.ports}
+    if (actual != expected or contract.reset_kind != "asynchronous"
+            or contract.reset_polarity != "high"):
+        return None
+    return SelfTest("""
+integer i,j;
+reg [6:0] ref_history;
+reg [1:0] ref_pht [0:127];
+reg expected_taken;
+task step;
+  reg [6:0] lookup_index, update_index, history_before;
+  begin
+    #1;
+    history_before = ref_history;
+    expected_taken = 1'b0;
+    if (predict_valid) begin
+      lookup_index = predict_pc ^ ref_history;
+      expected_taken = ref_pht[lookup_index][1];
+      check(predict_taken, expected_taken, 1'b1,
+            $sformatf("prediction index=%0d", lookup_index));
+      check(predict_history, ref_history, 7'h7f,
+            $sformatf("history snapshot=%0h", ref_history));
+    end
+    clk=1'b1; #1;
+    if (train_valid) begin
+      update_index = train_pc ^ train_history;
+      if (train_taken) begin
+        if (ref_pht[update_index] != 2'b11)
+          ref_pht[update_index] = ref_pht[update_index] + 1'b1;
+      end else if (ref_pht[update_index] != 2'b00) begin
+        ref_pht[update_index] = ref_pht[update_index] - 1'b1;
+      end
+    end
+    if (train_valid && train_mispredicted)
+      ref_history = {train_history[5:0], train_taken};
+    else if (predict_valid)
+      ref_history = {history_before[5:0], expected_taken};
+    clk=1'b0; #1;
+  end
+endtask
+""", """
+clk=0; areset=1; predict_valid=0; predict_pc=0;
+train_valid=0; train_taken=0; train_mispredicted=0;
+train_history=0; train_pc=0;
+#2; areset=0; #1;
+// Force every table entry to a known saturation endpoint; do not assume reset encoding.
+for(i=0;i<128;i=i+1) begin
+  train_pc=i; train_history=0; train_taken=1; train_valid=1;
+  for(j=0;j<4;j=j+1) begin #1; clk=1; #1; clk=0; #1; end
+  ref_pht[i]=2'b11;
+end
+// Establish a known global history through the specified recovery interface.
+train_valid=1; train_mispredicted=1; train_taken=0;
+train_history=0; train_pc=0; #1; clk=1; #1; clk=0; #1;
+ref_history=0; train_valid=0; train_mispredicted=0; predict_valid=1;
+for(i=0;i<128;i=i+1) begin predict_pc=i ^ ref_history; step(); end
+predict_valid=0; train_taken=0; train_valid=1;
+for(i=0;i<128;i=i+1) begin
+  train_pc=i; train_history=0;
+  for(j=0;j<4;j=j+1) begin #1; clk=1; #1; clk=0; #1; end
+  ref_pht[i]=2'b00;
+end
+train_valid=0; predict_valid=1;
+for(i=0;i<128;i=i+1) begin predict_pc=i ^ ref_history; step(); end
+// The lookup on the second update must still see the old weak-not-taken counter.
+train_valid=1; train_taken=1; train_mispredicted=0;
+train_history=0; train_pc=7'd17; predict_pc=7'd17 ^ ref_history; step();
+predict_pc=7'd17 ^ ref_history; step();
+train_valid=0; predict_pc=7'd17 ^ ref_history; step();
+// Ordinary training must not block a concurrent prediction history update.
+train_valid=1; train_taken=1; train_mispredicted=0; train_pc=7'd6; train_history=0;
+predict_pc=7'd20 ^ ref_history; step();
+train_valid=0; predict_pc=7'd20 ^ ref_history; step();
+// A misprediction recovery overrides the younger same-cycle prediction update.
+train_valid=1; train_taken=1; train_mispredicted=1;
+train_history=7'h35; train_pc=7'd9 ^ 7'h35; predict_pc=7'd4 ^ ref_history; step();
+train_valid=0; predict_pc=7'd4 ^ ref_history; step();
+""", "All 128 PHT entries checked at both saturation endpoints; pre-edge lookup, current history snapshot, concurrent training/prediction and misprediction recovery",
+        "The reset counter encoding is not assumed; repeated training establishes known table endpoints.")
 
 
 def _fits_waveform(samples, output, source, clock, kind):

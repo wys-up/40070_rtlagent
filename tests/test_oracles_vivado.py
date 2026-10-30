@@ -29,6 +29,61 @@ class VivadoOracleTests(unittest.TestCase):
                      "integer i; always @* begin out=0; for(i=0;i<15;i=i+1) out=out+in[i]; end",
                      "always @* out=0;")
 
+    def test_gshare_lookup_timing_and_training_priority(self):
+        self.compare("""A gshare branch predictor with train_mispredicted.
+Reset is asynchronous active-high. If training takes precedence for a misprediction,
+recover history. A simultaneous prediction sees the PHT state before training.
+""", """module TopModule(input clk,areset,predict_valid,input [6:0] predict_pc,
+output reg predict_taken,output reg [6:0] predict_history,input train_valid,train_taken,
+train_mispredicted,input [6:0] train_history,train_pc)""",
+                     """
+reg [6:0] history;
+reg [1:0] pht[0:127];
+integer k;
+wire [6:0] pi=predict_pc ^ history;
+wire [6:0] ti=train_pc ^ train_history;
+always @* begin predict_taken=pht[pi][1]; predict_history=history; end
+always @(posedge clk or posedge areset) begin
+  if(areset) begin
+    history<=0;
+    for(k=0;k<128;k=k+1) pht[k]<=2'b01;
+  end else begin
+    if(train_valid) begin
+      if(train_taken && pht[ti]!=3) pht[ti]<=pht[ti]+1'b1;
+      else if(!train_taken && pht[ti]!=0) pht[ti]<=pht[ti]-1'b1;
+    end
+    if(train_valid && train_mispredicted)
+      history<={train_history[5:0],train_taken};
+    else if(predict_valid)
+      history<={history[5:0],predict_taken};
+  end
+end
+""", """
+reg [6:0] history;
+reg [1:0] pht[0:127];
+integer k;
+wire [6:0] pi=predict_pc ^ history;
+wire [6:0] ti=train_pc ^ train_history;
+always @(posedge clk or posedge areset) begin
+  if(areset) begin
+    history<=0; predict_taken<=0; predict_history<=0;
+    for(k=0;k<128;k=k+1) pht[k]<=2'b01;
+  end else begin
+    if(predict_valid) begin
+      predict_taken<=pht[pi][1]; predict_history<=history;
+    end
+    if(train_valid) begin
+      if(train_taken && pht[ti]!=3) pht[ti]<=pht[ti]+1'b1;
+      else if(!train_taken && pht[ti]!=0) pht[ti]<=pht[ti]-1'b1;
+    end
+    if(train_valid && train_mispredicted)
+      history<={train_history[5:0],train_taken};
+    else if(predict_valid)
+      history<={history[5:0],predict_taken};
+  end
+end
+""")
+
     def test_sign_extension(self):
         self.compare("Sign-extend the smaller number.",
                      "module TopModule(input [3:0] in, output [7:0] out)",

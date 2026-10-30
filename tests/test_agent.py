@@ -120,6 +120,7 @@ class InterfaceAndContractTests(unittest.TestCase):
         system = (root / "agent/prompts/system.md").read_text(encoding="utf-8")
         repair = (root / "agent/prompts/repair.md").read_text(encoding="utf-8")
         for phrase in ("Moore", "Galois", "p-1", "gshare", "PHT",
+                       "组合产生", "只有 `train_valid && train_mispredicted`",
                        "每个 data bit", "错误 stop"):
             self.assertIn(phrase, system)
         self.assertIn("保持原有状态转移条件", repair)
@@ -206,6 +207,27 @@ class SelfTestTests(unittest.TestCase):
 
 
 class SpecificationOracleTests(unittest.TestCase):
+    def test_gshare_oracle_requires_exact_spec_shape_and_checks_concurrency(self):
+        prompt = ("Implement a gshare branch predictor with train_mispredicted. "
+                  "Reset is asynchronous active-high. "
+                  "If training takes precedence for a misprediction, recover history. "
+                  "A simultaneous prediction sees the PHT state before training.")
+        interface = ("module TopModule(input clk,areset,predict_valid,input [6:0] predict_pc, "
+                     "output predict_taken,output [6:0] predict_history, "
+                     "input train_valid,train_taken,train_mispredicted, "
+                     "input [6:0] train_history,train_pc);")
+        contract = extract_contract(prompt, interface, "TopModule")
+        test = from_spec(prompt, contract)
+        self.assertIsNotNone(test)
+        self.assertIn("old weak-not-taken counter", test.stimulus)
+        self.assertIn("Ordinary training must not block", test.stimulus)
+        self.assertIn("overrides the younger", test.stimulus)
+        self.assertIn("reset counter encoding is not assumed", test.uncertainties)
+        wrong_shape = extract_contract(
+            prompt, interface.replace("[6:0] train_history", "[5:0] train_history"),
+            "TopModule")
+        self.assertIsNone(from_spec(prompt, wrong_shape))
+
     def test_population_count_is_independent_and_covers_top_bit(self):
         interface = "module TopModule(input [254:0] in, output [7:0] out);"
         contract = extract_contract('A "population count" circuit.', interface, "TopModule")
