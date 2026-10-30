@@ -458,7 +458,7 @@ with patch.object(main, 'DEADLINE_S', 31), \\
             env.pop("AGENT_DEADLINE_MONOTONIC", None)
             result = subprocess.run(
                 [sys.executable, "-c", source, tmp, tmp],
-                cwd=Path(__file__).resolve().parents[2], env=env,
+                cwd=Path(__file__).resolve().parents[1], env=env,
                 capture_output=True, text=True, timeout=6)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertLess(time.monotonic() - started, 5)
