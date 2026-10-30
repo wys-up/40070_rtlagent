@@ -499,13 +499,24 @@ def summarize_log(log: str, budget: int = 2000) -> str:
     carry a verdict, drop the rest, and mark the truncation honestly.
     """
     lines = [ln.rstrip() for ln in log.splitlines()]
-    # A large inferred-memory/latch listing must not bury multi-driver or
-    # out-of-bounds diagnostics in the limited model context.
+    # Causal errors lead the excerpt so repeated warnings cannot hide the
+    # failure the model needs to repair.
+    failures = [ln for ln in lines if re.search(
+        r"\b(?:ERROR|FATAL):|AGENT_MISMATCH|AGENT_CHECKER_ERROR|timed? out|timeout",
+        ln, re.I)]
     warnings = dangerous_warnings(log)
     critical = ([ln for ln in warnings if _DANGEROUS.search(ln)]
                 + [ln for ln in warnings if not _DANGEROUS.search(ln)])
-    keep = critical + [ln for ln in lines
-                       if ln not in critical and any(k in ln for k in _INTERESTING)]
+    verdicts = [ln for ln in lines if re.search(
+        r"Synthesis finished|Synthesis failed|Mismatches:|AGENT_SELFTEST_PASS|AGENT_",
+        ln, re.I)]
+    interesting = [ln for ln in lines if any(k in ln for k in _INTERESTING)]
+    keep = []
+    seen = set()
+    for line in failures + critical + verdicts + interesting:
+        if line and line not in seen:
+            keep.append(line)
+            seen.add(line)
     if not keep:
         keep = lines[-40:]
 

@@ -54,7 +54,8 @@ class InterfaceAndContractTests(unittest.TestCase):
 
     def test_wrapped_sync_reset_and_scope(self):
         prompt = "Reset is active-high\nsynchronous. Implement only the combinational logic."
-        contract = extract_contract(prompt, INTERFACE, "TopModule")
+        interface = "module TopModule(input clk, reset, a, output q);"
+        contract = extract_contract(prompt, interface, "TopModule")
         self.assertEqual(contract.reset_kind, "synchronous")
         self.assertTrue(contract.combinational_only)
         self.assertEqual(check_semantics(
@@ -77,12 +78,25 @@ class InterfaceAndContractTests(unittest.TestCase):
         self.assertIsNone(contract.reset_kind)
 
     def test_explicit_async_polarity(self):
+        interface = "module TopModule(input clk, resetn, a, output q);"
         contract = extract_contract("Active-low asynchronous reset.",
-                                    INTERFACE, "TopModule")
+                                    interface, "TopModule")
         self.assertEqual(check_semantics(
             "always @(posedge clk or posedge resetn) q<=a;", contract)[0], 1)
         self.assertEqual(check_semantics(
             "always @(posedge clk or negedge resetn) q<=a;", contract)[0], 0)
+
+    def test_undeclared_clock_cannot_be_invented_for_combinational_task(self):
+        contract = extract_contract("Implement a combinational AND function.",
+                                    INTERFACE, "TopModule")
+        rc, message = check_semantics("always @(posedge clk) q<=a & b;", contract)
+        self.assertEqual(rc, 1)
+        self.assertIn("no declared clock or reset input", message)
+        clocked = extract_contract(
+            "Update q on the positive edge of clk.",
+            "module TopModule(input clk, input a, output reg q);", "TopModule")
+        self.assertEqual(check_semantics(
+            "always @(posedge clk) q<=a;", clocked)[0], 0)
 
     def test_explicit_synchronous_event_repair_preserves_body(self):
         interface = "module TopModule(input clk, reset, d, output q);"
@@ -137,6 +151,14 @@ class InterfaceAndContractTests(unittest.TestCase):
         self.assertEqual(tools.dangerous_warnings("WARNING: license renewal"), [])
         self.assertTrue(tools.dangerous_warnings("INFO: inferred latch for q"))
         self.assertFalse(tools.dangerous_warnings("INFO: inferred latch for q", True))
+
+    def test_log_summary_keeps_first_error_ahead_of_warning_flood(self):
+        warnings = "\n".join(
+            f"CRITICAL WARNING: [Synth 8-6859] multi-driven net n{i}" for i in range(80))
+        log = warnings + "\nERROR: [VRFC 10-4982] syntax error near endmodule"
+        summary = tools.summarize_log(log)
+        self.assertLess(summary.index("ERROR: [VRFC 10-4982]"),
+                        summary.index("Synth 8-6859"))
 
     def test_compiler_directed_type_repair_preserves_logic(self):
         source = "module TopModule(input a, output q);\nalways @* q=a;\nendmodule"
