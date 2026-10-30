@@ -29,6 +29,17 @@ class VivadoOracleTests(unittest.TestCase):
                      "integer i; always @* begin out=0; for(i=0;i<15;i=i+1) out=out+in[i]; end",
                      "always @* out=0;")
 
+    def test_galois_rejects_fibonacci_feedback(self):
+        self.compare("""A Galois LFSR shifts right. A tap is XORed with q[0].
+The module should implement a 5-bit maximal-length Galois LFSR with taps
+at bit positions 5 and 3. The active-high synchronous reset should reset
+the LFSR output to 1. Trigger on the positive edge of the clock.
+""", "module TopModule(input clk,reset,output reg [4:0] q)",
+                     "always @(posedge clk) if(reset) q<=1; "
+                     "else q<=(q>>1) ^ (q[0] ? 5'h14 : 5'h00);",
+                     "always @(posedge clk) if(reset) q<=1; "
+                     "else q<={q[0]^q[2],q[4:1]};")
+
     def test_gshare_lookup_timing_and_training_priority(self):
         self.compare("""A gshare branch predictor with train_mispredicted.
 Reset is asynchronous active-high. If training takes precedence for a misprediction,

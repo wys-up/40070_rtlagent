@@ -15,6 +15,9 @@ def _check(name: str, value: int, width: int, label: str) -> str:
 
 
 def from_spec(prompt: str, contract: Contract) -> SelfTest | None:
+    galois = _galois_lfsr(prompt, contract)
+    if galois:
+        return galois
     gshare = _gshare(prompt, contract)
     if gshare:
         return gshare
@@ -140,6 +143,75 @@ end
                                 " ".join(hints))
     return (_state_table(prompt, contract) or _moore_arrows(prompt, contract)
             or _edge_capture(prompt, contract))
+
+
+def _galois_lfsr(prompt: str, contract: Contract) -> SelfTest | None:
+    """Recognize only explicit right-shifting XOR Galois specifications.
+
+    Topology, taps, seed, edge and reset must all be supplied. The reference
+    recurrence is derived from prose, never a candidate or a task identifier.
+    """
+    text = re.sub(r"\s+", " ", prompt).lower()
+    if (not re.search(r"galois lfsr", text)
+            or not re.search(r"shifts? right|right.shift", text)
+            or not re.search(r"xor(?:ed)?", text)
+            or re.search(r"\bxnor\b|shifts? left|left.shift|negative edge|falling edge", text)
+            or not re.search(r"positive edge|rising edge|posedge", text)
+            or contract.reset_kind != "synchronous"
+            or contract.reset_polarity != "high"):
+        return None
+    ports = {n: (d, w) for d, w, n in contract.ports}
+    if (set(ports) != {"clk", "reset", "q"}
+            or ports["clk"] != ("input", 1)
+            or ports["reset"] != ("input", 1)
+            or ports["q"][0] != "output"):
+        return None
+    width = ports["q"][1]
+    taps = re.findall(r"\btaps? (?:at (?:bit )?positions? )?"
+                      r"([0-9]+(?:(?:\s*,\s*(?:and\s+)?|\s+and\s+)[0-9]+)*)"
+                      r"\s*[.;]", text)
+    seeds = re.findall(r"reset (?:the )?lfsr output to ([0-9]+)\s*[.;]", text)
+    sizes = re.findall(r"(?:implement (?:a|an) |a )(\d+)-bit.{0,30}galois lfsr", text)
+    if (not 2 <= width <= 64 or len(taps) != 1 or len(seeds) != 1
+            or len(sizes) != 1 or int(sizes[0]) != width):
+        return None
+    positions = [int(p) for p in re.findall(r"\d+", taps[0])]
+    seed = int(seeds[0])
+    if (len(set(positions)) != len(positions)
+            or not all(1 <= p <= width for p in positions)
+            or width not in positions or not 0 < seed < (1 << width)):
+        return None
+    tap_mask = sum(1 << (p - 1) for p in positions)
+    mask = (1 << width) - 1
+    return SelfTest(f"""
+integer i;
+reg [{width-1}:0] expected;
+task sample_edge;
+begin
+  #1;
+  if(reset) expected={width}'d{seed};
+  else if(expected[0]) expected=(expected >> 1) ^ {width}'h{tap_mask:x};
+  else expected=expected >> 1;
+  clk=1; #1;
+  check(q,expected,{width}'h{mask:x},$sformatf("Galois cycle=%0d reset=%0b",i,reset));
+  clk=0; #1;
+end
+endtask
+""", f"""
+clk=0; reset=1; i=0;
+sample_edge;
+reset=0;
+for(i=0;i<{min((1 << width) + 2, 512)};i=i+1) sample_edge;
+// Reset off-edge must hold; the following edge must restore the explicit seed.
+reset=1; #1;
+check(q,expected,{width}'h{mask:x},"synchronous reset off-edge holds");
+sample_edge;
+reset=0;
+for(i=0;i<{min((1 << width) + 2, 512)};i=i+1) sample_edge;
+""", "Explicit XOR Galois recurrence, every state for small registers, seed, synchronous reset and restart",
+        f"Right-shifting Galois: shift the old state, then XOR old q[0] into "
+        f"one-based tap bits p-1; mask={width}'h{tap_mask:x}. "
+        "Do not replace distributed feedback with Fibonacci feedback.")
 
 
 def _gshare(prompt: str, contract: Contract) -> SelfTest | None:

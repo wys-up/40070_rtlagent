@@ -176,6 +176,11 @@ actual row/column labels and care masks. For sequential designs use a reference
 transition table and cycle count. Cover reset off-edge/on-edge and release,
 priorities, boundary counts, asymmetric shifts, overlaps, back-to-back frames
 and error recovery as relevant. Do not assume all history is cleared on reset.
+For serial frames, count EVERY data sampling edge, including zero-valued bits;
+test all-zero bytes, mixed bytes and malformed stops. Do not infer a done/output
+cycle that the prose does not establish. For feedback registers, first identify
+Galois versus Fibonacci, shift direction, XOR versus XNOR and tap numbering;
+derive the reference next-state equations from those explicit requirements.
 Do not compare unspecified initial states or don't-care bits. If an oracle cannot
 be derived reliably, put the reason in uncertainties and do not invent expected
 values. Keep the test bounded to at most 2048 cycles, avoid huge unrolled code.

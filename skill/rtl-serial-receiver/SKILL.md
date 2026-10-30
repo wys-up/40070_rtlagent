@@ -9,6 +9,7 @@ description: Implement cycle-accurate serial frame receivers with exact start, d
 - **Log signatures:** `serial receiver`, `UART`, `start bit`, `stop bit`, `received byte`, `fsm_serial`, `Mismatches:`
 
 - Make a cycle table for start, each data bit, and stop. Count and sample every data bit, including the terminal bit (bit 7 in an eight-bit frame), before testing STOP.
+- Frame progress depends on the number of sampling edges, never on whether a data bit is 0 or 1. Exercise all-zero bytes and nonuniform bytes to expose conditional counter updates.
 - For LSB-first reception, the first sampled data bit becomes output bit 0. Derive whether the shift expression should shift right or left using a mixed-bit sample, not a repeating or symmetric byte.
 - Update the received byte and pulse `done` on the exact specified edge. If `done` is a one-cycle pulse, default it low on other active edges unless the specification says otherwise.
 - On an invalid stop bit, follow the specified recovery rule. If the receiver must wait in STOP for a high bit, hold there; do not return to IDLE, emit `done`, or interpret the low stop sample as a new start.

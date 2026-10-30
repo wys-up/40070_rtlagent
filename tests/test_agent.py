@@ -231,6 +231,31 @@ class SelfTestTests(unittest.TestCase):
 
 
 class SpecificationOracleTests(unittest.TestCase):
+    def test_galois_oracle_derives_width_taps_and_seed_from_spec(self):
+        for width, taps, seed, mask in ((5, "5 and 3", 1, "14"),
+                                         (7, "7 and 6", 3, "60")):
+            prompt = (f"A Galois LFSR shifts right. A tap is XORed with q[0]. "
+                      f"The module should implement a {width}-bit maximal-length "
+                      f"Galois LFSR with taps at bit positions {taps}. "
+                      f"The active-high synchronous reset should reset the LFSR "
+                      f"output to {seed}. Trigger on the positive edge of the clock.")
+            header = f"module TopModule(input clk,reset,output [{width-1}:0] q);"
+            contract = extract_contract(prompt, header, "TopModule")
+            test = from_spec(prompt, contract)
+            self.assertIsNotNone(test)
+            self.assertIn(f"^ {width}'h{mask}", test.declarations)
+            self.assertIn(f"expected={width}'d{seed}", test.declarations)
+            self.assertIn("synchronous reset off-edge holds", test.stimulus)
+            for old, new in (("shifts right", "shifts left"),
+                             ("XORed", "XNORed"),
+                             ("positive edge", "negative edge"),
+                             (f"positions {taps}", "positions 99"),
+                             (f"positions {taps}", "positions 5 or 3"),
+                             (f"output to {seed}", "output to 1'b0"),
+                             (f"output to {seed}", "output to an unspecified seed")):
+                changed = prompt.replace(old, new)
+                self.assertIsNone(from_spec(changed, extract_contract(changed, header, "TopModule")))
+
     def test_gshare_oracle_requires_exact_spec_shape_and_checks_concurrency(self):
         prompt = ("Implement a gshare branch predictor with train_mispredicted. "
                   "Reset is asynchronous active-high. "
