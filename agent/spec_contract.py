@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 import re
 
 from .tools import module_ports, ports_from_prompt, strip_comments
@@ -18,6 +18,8 @@ class Contract:
     combinational_only: bool
     scope_evidence: list[str]
     allow_latches: bool
+    combinational_outputs: list[str] = field(default_factory=list)
+    registered_outputs: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -45,6 +47,16 @@ class Contract:
             rules.append("Implement ONLY combinational logic, including when an "
                          "unused clock port exists. Evidence: "
                          + " | ".join(self.scope_evidence))
+        elif self.combinational_outputs or self.registered_outputs:
+            if self.combinational_outputs:
+                rules.append("Only these named outputs are explicitly combinational: "
+                             + ", ".join(self.combinational_outputs)
+                             + ". Keep separately specified state and registered "
+                               "outputs clocked.")
+            if self.registered_outputs:
+                rules.append("These named outputs are explicitly registered: "
+                             + ", ".join(self.registered_outputs)
+                             + ". Do not add or remove a cycle of latency.")
         return "\n".join("- " + rule for rule in rules)
 
 
@@ -69,12 +81,33 @@ def extract_contract(prompt: str, interface: str, top: str) -> Contract:
     polarity = "high" if high and not low else "low" if low and not high else None
     scope = [s for s in sentences if re.search(
         r"(?:implement|write|design).{0,100}(?:only the combinational|"
-        r"combinational (?:logic|portion|part))|"
+        r"combinational (?:logic|portion|part)|"
+        r"(?:purely|entirely) combinational "
+        r"(?:module|logic|circuit|block|design))|"
         r"(?:only|just).{0,30}combinational|"
-        r"(?:purely|entirely) combinational|"
         r"implement.{0,40}output logic and next.?state logic", s, re.I)]
-    return Contract(top, ports, kind, polarity, (sync + async_)[:4], bool(scope), scope[:3],
-                    bool(re.search(r"\blatch(?:es)?\b|transparent|waveforms?", prompt, re.I)))
+    output_names = {n for d, _, n in ports if d == "output"}
+    local_comb = []
+    registered = []
+    for sentence in sentences:
+        for match in re.finditer(
+                r"\b([A-Za-z_]\w*)\s+is\s+(?:a\s+)?"
+                r"(?:purely|entirely|strictly)?\s*combinational\b",
+                sentence, re.I):
+            if match.group(1) in output_names:
+                local_comb.append(match.group(1))
+        for match in re.finditer(
+                r"\b([A-Za-z_]\w*)\s+is\s+(?:a\s+)?registered\b|"
+                r"\bregistered\s+output\s+([A-Za-z_]\w*)\b",
+                sentence, re.I):
+            name = match.group(1) or match.group(2)
+            if name in output_names:
+                registered.append(name)
+    return Contract(
+        top, ports, kind, polarity, (sync + async_)[:4], bool(scope), scope[:3],
+        bool(re.search(r"\blatch(?:es)?\b|transparent|waveforms?", prompt, re.I)),
+        list(dict.fromkeys(local_comb)), list(dict.fromkeys(registered)),
+    )
 
 
 def check_semantics(source: str, contract: Contract) -> tuple[int, str]:

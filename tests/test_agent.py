@@ -263,6 +263,16 @@ class SelfTestTests(unittest.TestCase):
             'a=1; b=1; settle(); check(q,1,1,"local task is only a label");')
         parse_selftest(json.dumps(data), self.contract)
 
+    def test_helper_tasks_are_normalized_to_automatic_once(self):
+        for declaration in ("task settle;", "task automatic settle;"):
+            with self.subTest(declaration=declaration):
+                data = dict(TEST.__dict__)
+                data["declarations"] = declaration + " begin #1; end endtask"
+                data["stimulus"] = 'a=1; b=1; settle(); check(q,1,1,"settled");'
+                checker = parse_selftest(json.dumps(data), self.contract)
+                self.assertIn("task automatic settle;", checker.declarations)
+                self.assertNotIn("automatic automatic", checker.declarations)
+
     def test_stimulus_locals_cannot_shadow_controller_ports(self):
         for declaration in ("reg q;", "logic signed [3:0] q;", "integer i,q;",
                             "integer a;", "string q;",

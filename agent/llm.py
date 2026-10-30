@@ -149,9 +149,8 @@ class LLM:
         user = "\n".join(m["content"] for m in messages if m["role"] == "user")
         header, outputs = _parse_module(user)
         if header is None:
-            # 评测题集不下发 interface.txt，题面里也没有 module 声明，端口清单
-            # 是 `- input clk` 这样的列表。桩模式必须走和评测当天同一条路，
-            # 否则它验证的链路和真正要跑的那条不是一回事。
+            # Some prompts provide the interface as a port list instead of a
+            # complete module declaration.
             header, outputs = _header_from_prompt(user)
 
         if header:

@@ -154,6 +154,11 @@ def parse_selftest(text: str, contract: Contract) -> SelfTest:
             raise ValueError(f"self-test field {field} must be a string")
     test = SelfTest(data["declarations"], data["stimulus"], data["coverage"],
                     str(data.get("uncertainties", "")))
+    # Vivado requires automatic tasks when they use ref arguments or recursive/
+    # re-entrant state. Normalizing the declaration keeps the checker portable
+    # without changing its stimulus or oracle.
+    test.declarations = re.sub(
+        r"\btask\s+(?!automatic\b)", "task automatic ", test.declarations)
     code = test.declarations + "\n" + test.stimulus
     # The model can supply a reference model and stimuli, not verdict machinery.
     forbidden = (r"\bagent_\w*\b|\bdut\b|\b(?:module|endmodule|initial|always"
@@ -248,6 +253,9 @@ Helpers are module scoped, not class methods: use task automatic tick; begin
 End a standalone delay with a semicolon: #1; before end/endtask/endfunction.
 NEVER redeclare the input/output ports; their exact names and widths are in the
 parsed contract. Declare all helper variables here, not halfway through a block.
+Every helper task must be declared as `task automatic`; do not use non-automatic
+tasks with `ref` arguments. Do not declare integer/reg/logic variables inside
+stimulus blocks or loops.
 stimulus: statements INSIDE an existing initial begin/end; no initial/module.
 Put every check(...) call directly in stimulus, interleaved with input driving
 and settling. Helpers may compute references or tick clocks, not call check().

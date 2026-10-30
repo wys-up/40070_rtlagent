@@ -173,7 +173,7 @@ class RtlToolchain:
 _MODULE_RE = re.compile(r"module\s+(\w+)\s*(?:#\s*\([^)]*\)\s*)?\((.*?)\)\s*;", re.DOTALL)
 
 
-# 题面里的端口清单。VerilogEval 的 spec-to-rtl 题面长这样：
+# Prose port lists commonly use this form:
 #
 #     I would like you to implement a module named TopModule with the following
 #     interface. All input and output ports are one bit unless otherwise specified.
@@ -182,40 +182,71 @@ _MODULE_RE = re.compile(r"module\s+(\w+)\s*(?:#\s*\([^)]*\)\s*)?\((.*?)\)\s*;", 
 #      - input  d   (8 bits)
 #      - output q   (8 bits)
 #
-# 实测 156 道题里 153 道是这个格式（位宽可缺省、括号内可有多余空格、端口名后
-# 可带逗号），其余 3 道直接在题面里贴完整的 module 声明，由 _ports() 兜住。
-# 位宽单位兼容中英文：评测题集（VerilogEval）是英文的 `(8 bits)`，本仓库的示例题
-# 是中文的 `(8 位)`。只认一种的话，带位宽的端口会被整行丢掉 —— 不是报错，是静默
-# 少几个端口，比不解析更糟。
+# Widths may be omitted, followed by optional whitespace and commas. The parser
+# accepts both English and Chinese width units used by repository prompts.
 _PROMPT_PORT_RE = re.compile(
     r"^\s*-\s*(input|output|inout)\s+([A-Za-z_]\w*)\s*,?"
     r"\s*(?:\(\s*(\d+)\s*(?:bits?|位)\s*\))?\s*$",
     re.MULTILINE)
+_PROMPT_VECTOR_PORT_RE = re.compile(
+    r"^\s*-\s*(input|output|inout)\s+"
+    r"\[\s*(\d+)\s*:\s*(\d+)\s*\]\s*([A-Za-z_]\w*)\s*,?\s*$",
+    re.MULTILINE)
+_INLINE_INTERFACE_PORT_RE = re.compile(
+    r"\b(input|output|inout)\s+"
+    r"(?:\[\s*(\d+)\s*:\s*(\d+)\s*\]\s*)?([A-Za-z_]\w*)\b",
+    re.I)
 
 
 def ports_from_prompt(prompt: str) -> tuple[str | None, list[tuple[str, int, str]]]:
     """从题面还原模块名与端口表。
 
-    **评测题集的 `interface` 是空串** —— 接口信息写在题面里，不另出一份
-    （见 docs/API_CONTRACT.md）。不从题面取的话，check_interface 在评测当天会
-    静默失效：输入为空、检查照常返回「通过」，而 trace 里看不出区别。
-    而接口写错在本 track 判 L0，是全表最重的惩罚，这个检查恰恰最不该失效。
+    When the structured interface is absent, the prompt may still carry the
+    module name and port list. Parsing that fallback keeps interface checking
+    useful without treating arbitrary prose as authoritative.
     """
     text = prompt or ""
     ports = [(d, int(w) if w else 1, n)
              for d, n, w in _PROMPT_PORT_RE.findall(text)]
     listed = re.findall(r"^\s*-\s*(?:input|output|inout)\b.*$", text, re.M)
     if len(ports) != len(listed):
-        # A partially parsed prose list cannot justify rejecting extra ports.
-        return None, []
+        parsed_lines = []
+        for line in listed:
+            scalar = _PROMPT_PORT_RE.fullmatch(line)
+            vector = _PROMPT_VECTOR_PORT_RE.fullmatch(line)
+            if scalar:
+                d, name, width = scalar.groups()
+                parsed_lines.append((d, int(width) if width else 1, name))
+            elif vector:
+                d, hi, lo, name = vector.groups()
+                parsed_lines.append((d, abs(int(hi) - int(lo)) + 1, name))
+        if len(parsed_lines) == len(listed):
+            ports = parsed_lines
+        else:
+            # A partially parsed prose list cannot justify rejecting extra
+            # ports.
+            return None, []
     if not ports:
-        # 注意这里**不能**回退到解析题面里的 module 声明。bugs_* 那一类题面贴的
-        # 正是「有 bug 的模块」，其端口本身就是要改的东西（实测 Prob062_bugs_mux2
-        # 的题面把 8 位的 out 写成 1 位，找出它正是题目要求）。把它当规格会让
-        # 智能体把 bug 改回去。解析不出就如实返回空。
-        # 另：该题参考实现还把 sel 极性反了（sel ? a : b），题面推不出，属数据集
-        # 缺陷，见 selftest/README.md。智能体在这道题上过不了 L2 不说明修复逻辑有错。
-        return None, []
+        # Only trust an ANSI declaration when the surrounding prose labels it
+        # as the interface. A code block may otherwise be example data.
+        if not re.search(r"(?:following|exact)\s+interface|interface\s*:",
+                         text, re.I):
+            return None, []
+        module_match = _MODULE_RE.search(text)
+        if module_match:
+            return module_ports(module_match.group(0))
+        inline = re.search(r"interface\s*:\s*(.*?)(?:\.\s|\n|$)",
+                           text, re.I | re.S)
+        if not inline:
+            return None, []
+        inline_ports = _INLINE_INTERFACE_PORT_RE.findall(inline.group(1))
+        if not inline_ports:
+            return None, []
+        return (
+            "TopModule",
+            [(d.lower(), abs(int(hi) - int(lo)) + 1 if hi else 1, name)
+             for d, hi, lo, name in inline_ports],
+        )
     m = re.search(r"module\s+named\s+(\w+)", text)
     return (m.group(1) if m else "TopModule"), ports
 
@@ -226,17 +257,16 @@ def check_interface(source: str, interface: str,
 
     Deterministic, no tools, no model. Returns (0, "ok") or (1, <diagnosis>).
 
-    `interface` 为空时从 `prompt` 取端口表 —— 评测题集就是这种情况。
+    When `interface` is empty, the prompt port list is used as a fallback.
 
     Compares the module name and the ordered list of (direction, width, name).
     Whitespace, comments, and `wire`/`reg`/`logic` keywords are ignored -- those
     do not affect elaboration. Everything that does affect it is compared.
     """
     want_name, want_ports = _ports(interface)
-    # Authoritative interfaces are strict. Prompt direction/width differences
-    # stay advisory, but missing/extra ports and wrong module names are fatal.
-    # 依据：Prob031_dff 的题面把输出 q 误写成 `- input q`，而模型三次都正确
-    # 忽略了它并判到 L3 —— 拿题面硬比对会把这种正确答案改坏。
+    # A structured interface is authoritative. Prompt-derived direction and
+    # width differences remain advisory because prose can be ambiguous, while
+    # missing/extra ports and wrong module names remain fatal.
     advisory = False
     if want_name is None:
         want_name, want_ports = ports_from_prompt(prompt)
@@ -276,9 +306,8 @@ def check_interface(source: str, interface: str,
         return 0, ("interface matches the declaration" if not advisory
                    else "interface matches the port list read from the prompt")
     if advisory:
-        # 题面推出来的规格只作提示：rc=0 让流程继续，但把差异写进 trace，
-        # 由调用方决定要不要喂给下一轮。硬判会把 Prob031_dff 那种
-        # 「题面写错、模型写对」的正确答案改坏。
+        # Prompt-derived direction and width differences are reported for
+        # diagnostics but do not reject an otherwise compatible interface.
         return 0, ("⚠ 与题面端口清单不符（题面为散文，仅供参考，未拦截）: "
                    + "; ".join(problems))
     return 1, "interface mismatch: " + "; ".join(problems)
@@ -334,6 +363,60 @@ def module_ports(text: str, top: str | None = None) -> tuple[str | None, list[tu
         name = re.sub(r"\[[^\]]*\]", " ", decl).split()[-1]
         ports.append((direction, width, name))
     return m.group(1), ports
+
+
+def source_safety_warnings(source: str,
+                           ports: list[tuple[str, int, str]]) -> list[str]:
+    """Catch deterministic RTL hazards before spending a Vivado invocation.
+
+    This is intentionally narrow. It only diagnoses literal indices on ports
+    whose widths are known from the contract and `genvar` used in a procedural
+    loop. The compiler remains authoritative for all other syntax and semantics.
+    """
+    text = strip_comments(source)
+    widths = {name: width for _, width, name in ports if width > 0}
+    warnings: list[str] = []
+    for name, width in widths.items():
+        scalar = re.compile(rf"\b{re.escape(name)}\s*\[\s*(\d+)\s*\]")
+        for match in scalar.finditer(text):
+            index = int(match.group(1))
+            if index >= width:
+                warnings.append(
+                    f"literal index {index} is out of bounds for port "
+                    f"'{name}' with width {width} (valid indices 0..{width - 1})")
+        vector = re.compile(
+            rf"\b{re.escape(name)}\s*\[\s*(\d+)\s*:\s*(\d+)\s*\]")
+        for match in vector.finditer(text):
+            high, low = (int(value) for value in match.groups())
+            if max(high, low) >= width:
+                warnings.append(
+                    f"literal range [{high}:{low}] is out of bounds for port "
+                    f"'{name}' with width {width} (valid indices 0..{width - 1})")
+    if re.search(r"\balways(?:_ff|_comb)?\b[\s\S]{0,120}?\bbegin\b"
+                 r"(?:(?!\bend\b)[\s\S]){0,800}"
+                 r"\bfor\s*\(\s*genvar\b", text, re.I):
+        warnings.append(
+            "genvar appears in a procedural loop; use an integer loop variable "
+            "inside always, or move a generate-for to module scope")
+    return list(dict.fromkeys(warnings))
+
+
+def signed_arithmetic_warnings(source: str) -> list[str]:
+    """Catch common signed saturation encodings before tool execution."""
+    text = strip_comments(source)
+    warnings: list[str] = []
+    if re.search(r"\b\d+\s*'[sS][dD]\s*-\s*\d+\b", text):
+        warnings.append(
+            "invalid signed literal spelling: put unary minus before the "
+            "literal, for example -8'sd100, not 8'sd-100")
+    if (re.search(r"\b(?:sum|total|result|next|new_value)\b[\s\S]{0,100}"
+                  r"<\s*-\s*\d+", text, re.I)
+            and re.search(r"\b\d+\s*'[dD]\s*\d+\s*\+\s*"
+                          r"\d+\s*'[dD]\s*\d+", text)):
+        warnings.append(
+            "negative saturation branch uses unsigned sized addition; encode "
+            "the limit as a signed literal such as -8'sd100 or 8'h9c")
+    return list(dict.fromkeys(warnings))
 
 
 def _ports(text: str) -> tuple[str | None, list[tuple[str, int, str]]]:
