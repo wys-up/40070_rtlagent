@@ -141,6 +141,9 @@ class InterfaceAndContractTests(unittest.TestCase):
             self.assertIn(phrase, system)
         self.assertIn("保持原有状态转移条件", repair)
         self.assertIn("行为等价", repair)
+        self.assertIn("每个寄存器分别", repair)
+        self.assertIn("old_q[p]", (root / "skill/rtl-shift-register-pattern/SKILL.md")
+                      .read_text(encoding="utf-8"))
 
     def test_dangerous_warning_filter_and_summary(self):
         log = ("WARNING: [VRFC 10-3705] select index 255 is out of bounds\n"
