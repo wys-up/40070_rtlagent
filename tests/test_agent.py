@@ -121,6 +121,8 @@ class InterfaceAndContractTests(unittest.TestCase):
         repair = (root / "agent/prompts/repair.md").read_text(encoding="utf-8")
         for phrase in ("Moore", "Galois", "p-1", "gshare", "PHT",
                        "组合产生", "只有 `train_valid && train_mispredicted`",
+                       "计数器始终按真实结果 `train_taken` 增减",
+                       "{train_history[5:0], train_taken}",
                        "每个 data bit", "错误 stop"):
             self.assertIn(phrase, system)
         self.assertIn("保持原有状态转移条件", repair)

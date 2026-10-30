@@ -57,6 +57,9 @@
   history 快照；不要自行加输出寄存器。时钟沿同拍训练时，组合查询仍读更新前的 PHT。
   有效预测应在该沿推进 history；只有 `train_valid && train_mispredicted` 才按训练恢复
   history 并覆盖同拍预测推进。普通训练不能抑制同时发生的有效预测，PHT 更新独立进行。
+  PHT 计数器始终按真实结果 `train_taken` 增减，`train_mispredicted` 只表示错误预测和
+  history 恢复，不能拿它代替分支结果。若 7 位 `train_history` 是该分支执行前快照，
+  执行后的恢复值为 `{train_history[5:0], train_taken}`，不能只复制旧 history。
 - 串行接收器按采样边沿列出 start、每个 data bit（包括最后一位）和 stop。LSB-first
   首个采样位进入 bit 0；只有规格规定的有效 stop 边沿才能同时更新接收数据和完成脉冲。
   错误 stop 的保持与恢复行为必须逐字服从题面，不能擅自回到 IDLE 或重解释为新 start。
