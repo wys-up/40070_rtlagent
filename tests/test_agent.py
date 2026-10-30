@@ -218,6 +218,7 @@ class SelfTestTests(unittest.TestCase):
         self.assertIn("AND specification", messages[1]["content"])
         self.assertNotIn("assign q", str(messages))
         self.assertEqual(llm.chat.call_args.kwargs["timeout_s"], 9)
+        self.assertEqual(llm.chat.call_args.kwargs["max_tokens"], 2048)
 
     def test_simulator_requires_positive_completed_verdict(self):
         rtl = tools.RtlToolchain()

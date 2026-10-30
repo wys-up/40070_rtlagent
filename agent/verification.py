@@ -13,6 +13,8 @@ import time
 
 from .llm import LLM, strip_think
 from .spec_contract import Contract
+
+SELFTEST_MAX_TOKENS = 2048
 from .tools import strip_comments
 
 
@@ -202,7 +204,8 @@ also test the off-edge effect explicitly.
             if previous_error else "")},
     ]
     started = time.monotonic()
-    result = llm.chat(messages, timeout_s=timeout_s, max_tokens=4096)
+    result = llm.chat(messages, timeout_s=timeout_s,
+                      max_tokens=SELFTEST_MAX_TOKENS)
     record(result, time.monotonic() - started)
     return parse_selftest(result.text, contract)
 
