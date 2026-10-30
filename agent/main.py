@@ -17,7 +17,8 @@ import time
 
 from .llm import LLM, LLMError, extract_code
 from .skills import load_skills, select
-from .tools import RtlToolchain, check_interface
+from .tools import (RtlToolchain, check_interface, source_safety_warnings,
+                    signed_arithmetic_warnings)
 from .tools import stop_active_tools, repair_output_declarations
 from .spec_contract import extract_contract, check_semantics, repair_synchronous_events
 from .verification import generate_selftest, review_selftest
@@ -33,7 +34,7 @@ DEADLINE_S = float(os.environ.get("AGENT_DEADLINE_S", "900"))
 # 为写出结果预留的余量。
 RESERVE_S = float(os.environ.get("AGENT_RESERVE_S", "30"))
 GENERATION_S = float(os.environ.get("AGENT_GENERATION_S", "240"))
-CHECKER_S = float(os.environ.get("AGENT_CHECKER_S", "60"))
+CHECKER_S = float(os.environ.get("AGENT_CHECKER_S", "90"))
 VALIDATION_RESERVE_S = float(os.environ.get("AGENT_VALIDATION_RESERVE_S", "180"))
 
 
@@ -147,6 +148,7 @@ def solve_agent(llm: LLM, trace: Trace, prompt: str, interface: str, top: str,
                     coverage=selftest.coverage, uncertainties=selftest.uncertainties)
     restart_next = False
     duplicate_counts: dict[str, int] = {}
+    task_skills = select(skills, prompt)
 
     def remaining() -> float:
         return max(0.0, deadline_at - time.monotonic())
@@ -207,7 +209,12 @@ def solve_agent(llm: LLM, trace: Trace, prompt: str, interface: str, top: str,
         # Skills can be relevant before any tool has run.  Matching the task
         # statement here lets timing/reset skills shape the first RTL draft;
         # log-only skills still activate on later repair rounds.
-        chosen = select(skills, prompt, last_log)
+        chosen = list(task_skills)
+        for skill in select(skills, last_log):
+            if skill not in chosen:
+                chosen.append(skill)
+            if len(chosen) >= 3:
+                break
         if contract.combinational_only:
             chosen = [s for s in chosen if s.name != "rtl-sequential-timing"]
         if chosen:
@@ -302,6 +309,17 @@ def solve_agent(llm: LLM, trace: Trace, prompt: str, interface: str, top: str,
                     excerpt=semantic_log)
         if semantic_rc:
             last_log = failed(digest, semantic_log)
+            continue
+        safety = source_safety_warnings(code, contract.ports)
+        if re.search(r"\bsigned\s+8-bit\s+saturating\s+accumulator\b",
+                     prompt, re.I):
+            safety.extend(signed_arithmetic_warnings(code))
+            safety = list(dict.fromkeys(safety))
+        trace.write(tool="check_source_safety", round=rnd,
+                    rc=1 if safety else 0, warnings=safety)
+        if safety:
+            last_log = failed(digest, "source safety preflight:\n- "
+                                  + "\n- ".join(safety))
             continue
         retain(code, (1, 1, 0, 0, 0), rnd)
         if remaining() <= 0:

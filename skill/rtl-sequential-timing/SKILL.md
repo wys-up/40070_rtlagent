@@ -197,6 +197,13 @@ graded L1. Comparing `{shift_reg[2:0], in}` instead produced `0` mismatches in
 `226` samples and reached L3, including the overlapping sequence, synchronous
 reset, near misses, and random tail.
 
+The boundary task `boundary_detect1011` reproduced the same defect with a
+different pattern: `1011` had to be detected on the edge that samples its final
+bit, and `1011011` had to produce two overlapping pulses. Comparing the old
+four-bit register instead of `{history[2:0], in}` produced five mismatches. The
+reliable repair is to derive both `history_next` and the registered pulse from
+the same prospective window, then retain enough suffix history for overlaps.
+
 ## Output Format
 
 Return one complete Verilog/SystemVerilog module in the format requested by the

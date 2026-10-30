@@ -55,9 +55,22 @@ class Skill:
 
     def matches(self, *texts: str) -> bool:
         if not self.signatures:
+            haystack = "\n".join(t.lower() for t in texts if t)
+            if self.name == "rtl-wide-reduction":
+                return bool(re.search(
+                    r"\b(population count|popcount|count the number of .*bits|"
+                    r"number of bits equal to 1)\b", haystack))
+            if self.name == "rtl-kmap-truth-table":
+                return bool(re.search(r"\b(karnaugh|k-map|truth table)\b", haystack))
             return False
         haystack = "\n".join(t.lower() for t in texts if t)
         if any(sig.lower() in haystack for sig in self.signatures):
+            return True
+        if self.name == "rtl-combinational-scope" and re.search(
+                r"\b(?:output|signal|portion|logic)\b.{0,100}"
+                r"\b(?:purely|entirely|only)\s+combinational\b|"
+                r"\b(?:purely|entirely)\s+combinational\s+module\b",
+                haystack):
             return True
         if self.name == "rtl-sequential-timing":
             return bool(re.search(

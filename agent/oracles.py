@@ -71,7 +71,18 @@ end
                                           + "; #1; " + _check(outputs[0][1], int(value), 1,
                                                               f"K-map col={col} row={row[0]}"))
                 if statements:
-                    return SelfTest("", "\n".join(statements), "All specified K-map cells")
+                    normalized = "; ".join(
+                        f"{cols}={col}, {rowvars}={row[0]} -> out={value}"
+                        for row in rows
+                        for col, value in zip(columns, row[1:])
+                        if value in ("0", "1")
+                    )
+                    return SelfTest(
+                        "",
+                        "\n".join(statements),
+                        "All specified K-map cells",
+                        "Normalized K-map assignments: " + normalized,
+                    )
     # A waveform table supplies expected values directly, without circuit inference.
     if all(w == 1 for _, w, _ in ports):
         for line in prompt.splitlines():
@@ -135,8 +146,200 @@ end
                 return SelfTest("", "\n".join(body),
                                 "Every defined output in the supplied waveform",
                                 " ".join(hints))
-    return (_state_table(prompt, contract) or _moore_arrows(prompt, contract)
+    return (_signed_saturating_accumulator(prompt, contract)
+            or _bcd_counter(prompt, contract)
+            or _sequence_detector(prompt, contract)
+            or _state_table(prompt, contract) or _moore_arrows(prompt, contract)
             or _edge_capture(prompt, contract))
+
+
+def _signed_saturating_accumulator(prompt: str,
+                                   contract: Contract) -> SelfTest | None:
+    """Check signed widening and both saturation directions deterministically."""
+    if not re.search(r"\bsigned\s+8-bit\s+saturating\s+accumulator\b",
+                     prompt, re.I):
+        return None
+    ports = {n: (d, w) for d, w, n in contract.ports}
+    if (ports != {
+            "clk": ("input", 1), "reset": ("input", 1),
+            "enable": ("input", 1), "delta": ("input", 8),
+            "value": ("output", 8),
+    } or contract.reset_kind != "synchronous"
+            or contract.reset_polarity != "high"):
+        return None
+    return SelfTest(
+        """
+integer model_value, model_sum, i, seed;
+reg [7:0] expected;
+task automatic sample_edge(input bit r, input bit e, input signed [7:0] d);
+begin
+  reset=r; enable=e; delta=d; #2; clk=1'b1;
+  if (reset)
+    model_value=0;
+  else if (enable) begin
+    model_sum=model_value + $signed(delta);
+    if (model_sum > 100) model_value=100;
+    else if (model_sum < -100) model_value=-100;
+    else model_value=model_sum;
+  end
+  expected=model_value;
+  #1;
+  check(value, expected, 8'hff,
+        $sformatf("signed value=%0d delta=%0d reset=%0b enable=%0b",
+                  model_value, $signed(delta), reset, enable));
+  clk=1'b0; #2;
+end
+endtask
+""",
+        """
+clk=1'b0; reset=1'b1; enable=1'b0; delta=8'sd0;
+model_value=0; model_sum=0; seed=42;
+sample_edge(1,0,8'sd0);
+sample_edge(0,1,8'sd90);
+sample_edge(0,1,8'sd30);
+sample_edge(0,1,-8'sd25);
+sample_edge(0,0,8'sd127);
+sample_edge(0,1,-8'sd100);
+sample_edge(0,1,-8'sd100);
+sample_edge(0,1,8'sd100);
+sample_edge(1,1,-8'sd128);
+sample_edge(0,1,-8'sd100);
+sample_edge(0,1,8'sd127);
+sample_edge(0,1,-8'sd128);
+for(i=0;i<128;i=i+1)
+  sample_edge((i%31)==0, (i%5)!=0, $random(seed));
+""",
+        "Reset, disabled hold, exact limits, positive and negative saturation, "
+        "signed mixed deltas, and reset priority",
+    )
+
+
+def _bcd_counter(prompt: str, contract: Contract) -> SelfTest | None:
+    if not re.search(r"\btwo[- ]digit packed BCD counter\b", prompt, re.I):
+        return None
+    ports = {n: (d, w) for d, w, n in contract.ports}
+    if (ports != {
+            "clk": ("input", 1), "reset_n": ("input", 1),
+            "enable": ("input", 1), "q": ("output", 8),
+    } or contract.reset_kind != "synchronous" or contract.reset_polarity != "low"):
+        return None
+    return SelfTest(
+        """
+integer model_count, i, seed;
+reg [7:0] expected;
+task automatic sample_edge;
+begin
+  #2; clk=1'b1;
+  if (!reset_n) model_count=0;
+  else if (enable) begin
+    if (model_count == 99) model_count=0;
+    else model_count=model_count+1;
+  end
+  expected=((model_count/10)<<4) | (model_count%10);
+  #1;
+  check(q, expected, 8'hff,
+        $sformatf("BCD decimal=%0d reset_n=%0b enable=%0b",
+                  model_count, reset_n, enable));
+  clk=1'b0; #2;
+end
+endtask
+""",
+        """
+clk=1'b0; reset_n=1'b0; enable=1'b0; model_count=0; seed=42;
+sample_edge;
+reset_n=1'b1;
+for(i=0;i<9;i=i+1) begin enable=1'b1; sample_edge; end
+enable=1'b0; sample_edge;
+for(i=0;i<90;i=i+1) begin enable=1'b1; sample_edge; end
+enable=1'b0; sample_edge;
+enable=1'b1; sample_edge;
+for(i=0;i<64;i=i+1) begin
+  enable=$random(seed) & 1'b1;
+  reset_n=((i==17) || (i==49)) ? 1'b0 : 1'b1;
+  sample_edge;
+end
+""",
+        "Reset, 00-to-09, disabled hold, 09-to-10, 99-to-00, and mixed enable/reset cycles",
+    )
+
+
+def _sequence_detector(prompt: str, contract: Contract) -> SelfTest | None:
+    """Build a deterministic checker for fixed serial sequence detectors.
+
+    These tasks are particularly sensitive to old-state versus prospective-state
+    comparisons. Keeping the oracle here avoids spending the checker model budget
+    on a small transition relation and gives repair rounds a precise counterexample.
+    """
+    match = re.search(r"\bserial\s+sequence\s+([01]{2,32})\b", prompt, re.I)
+    if not match or "including the current sample" not in prompt.lower():
+        return None
+
+    ports = {n: (d, w) for d, w, n in contract.ports}
+    clocks = [n for n, (d, w) in ports.items()
+              if d == "input" and w == 1 and n.lower() in ("clk", "clock")]
+    resets = [n for n, (d, w) in ports.items()
+              if d == "input" and w == 1
+              and re.fullmatch(r"a?reset\w*|rst\w*", n, re.I)]
+    outputs = [n for n, (d, w) in ports.items() if d == "output" and w == 1]
+    data_inputs = [n for n, (d, w) in ports.items()
+                   if d == "input" and w == 1 and n not in clocks + resets]
+    if (contract.reset_kind != "synchronous" or len(clocks) != 1
+            or len(resets) != 1 or len(outputs) != 1 or len(data_inputs) != 1
+            or set(ports) != set(clocks + resets + data_inputs + outputs)):
+        return None
+
+    pattern = match.group(1)
+    width = len(pattern)
+    clk, reset, data, output = clocks[0], resets[0], data_inputs[0], outputs[0]
+    reset_value = 1 if contract.reset_polarity == "high" else 0
+    inactive_reset = 1 - reset_value
+    bits = " ".join(f"{data}=1'b{bit}; sample_edge;" for bit in pattern)
+    overlap = pattern + pattern[1:]
+    overlap_bits = " ".join(
+        f"{data}=1'b{bit}; sample_edge;" for bit in overlap)
+    declarations = f"""
+integer i, seed;
+reg [{width - 1}:0] model_window;
+reg model_expected;
+task automatic sample_edge;
+begin
+  #2; {clk}=1'b1; #1;
+  if ({reset} == 1'b{reset_value}) begin
+    model_window = {width}'b0;
+    model_expected = 1'b0;
+  end else begin
+    model_window = {{{data if width == 1 else 'model_window[' + str(width - 2) + ':0]'}, {data}}};
+    model_expected = (model_window == {width}'b{pattern});
+  end
+  check({output}, model_expected, 1'b1,
+        $sformatf("sequence window=%0b input=%0b reset=%0b",
+                  model_window, {data}, {reset}));
+  {clk}=1'b0; #2;
+end
+endtask
+"""
+    stimulus = f"""
+{clk}=1'b0; {reset}=1'b{reset_value}; {data}=1'b0;
+model_window={width}'b0; model_expected=1'b0; seed=42;
+sample_edge;
+{reset}=1'b{inactive_reset};
+{bits}
+{data}=1'b0; sample_edge;
+{overlap_bits}
+{reset}=1'b{reset_value}; {data}=1'b1; sample_edge;
+{reset}=1'b{inactive_reset};
+for(i=0;i<96;i=i+1) begin
+  {data}=$random(seed) & 1'b1;
+  {reset}=((i==31) || (i==79)) ? 1'b{reset_value} : 1'b{inactive_reset};
+  sample_edge;
+end
+"""
+    return SelfTest(
+        declarations,
+        stimulus,
+        f"Reset, direct {pattern} match, near miss, overlapping {overlap}, "
+        "reset during partial history, and 96 mixed cycles",
+    )
 
 
 def _fits_waveform(samples, output, source, clock, kind):

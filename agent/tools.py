@@ -191,6 +191,14 @@ _PROMPT_PORT_RE = re.compile(
     r"^\s*-\s*(input|output|inout)\s+([A-Za-z_]\w*)\s*,?"
     r"\s*(?:\(\s*(\d+)\s*(?:bits?|位)\s*\))?\s*$",
     re.MULTILINE)
+_PROMPT_VECTOR_PORT_RE = re.compile(
+    r"^\s*-\s*(input|output|inout)\s+"
+    r"\[\s*(\d+)\s*:\s*(\d+)\s*\]\s*([A-Za-z_]\w*)\s*,?\s*$",
+    re.MULTILINE)
+_INLINE_INTERFACE_PORT_RE = re.compile(
+    r"\b(input|output|inout)\s+"
+    r"(?:\[\s*(\d+)\s*:\s*(\d+)\s*\]\s*)?([A-Za-z_]\w*)\b",
+    re.I)
 
 
 def ports_from_prompt(prompt: str) -> tuple[str | None, list[tuple[str, int, str]]]:
@@ -206,16 +214,45 @@ def ports_from_prompt(prompt: str) -> tuple[str | None, list[tuple[str, int, str
              for d, n, w in _PROMPT_PORT_RE.findall(text)]
     listed = re.findall(r"^\s*-\s*(?:input|output|inout)\b.*$", text, re.M)
     if len(ports) != len(listed):
-        # A partially parsed prose list cannot justify rejecting extra ports.
-        return None, []
+        parsed_lines = []
+        for line in listed:
+            scalar = _PROMPT_PORT_RE.fullmatch(line)
+            vector = _PROMPT_VECTOR_PORT_RE.fullmatch(line)
+            if scalar:
+                d, name, width = scalar.groups()
+                parsed_lines.append((d, int(width) if width else 1, name))
+            elif vector:
+                d, hi, lo, name = vector.groups()
+                parsed_lines.append((d, abs(int(hi) - int(lo)) + 1, name))
+        if len(parsed_lines) == len(listed):
+            ports = parsed_lines
+        else:
+            # A partially parsed prose list cannot justify rejecting extra
+            # ports.
+            return None, []
     if not ports:
-        # 注意这里**不能**回退到解析题面里的 module 声明。bugs_* 那一类题面贴的
-        # 正是「有 bug 的模块」，其端口本身就是要改的东西（实测 Prob062_bugs_mux2
-        # 的题面把 8 位的 out 写成 1 位，找出它正是题目要求）。把它当规格会让
-        # 智能体把 bug 改回去。解析不出就如实返回空。
-        # 另：该题参考实现还把 sel 极性反了（sel ? a : b），题面推不出，属数据集
-        # 缺陷，见 selftest/README.md。智能体在这道题上过不了 L2 不说明修复逻辑有错。
-        return None, []
+        # Only trust an ANSI declaration when the prose labels it as the
+        # interface. Some VerilogEval bug-fixing prompts include a buggy module
+        # declaration as data; treating that declaration as the contract would
+        # make the interface checker enforce the bug.
+        if not re.search(r"(?:following|exact)\s+interface|interface\s*:",
+                         text, re.I):
+            return None, []
+        module_match = _MODULE_RE.search(text)
+        if module_match:
+            return module_ports(module_match.group(0))
+        inline = re.search(r"interface\s*:\s*(.*?)(?:\.\s|\n|$)",
+                           text, re.I | re.S)
+        if not inline:
+            return None, []
+        inline_ports = _INLINE_INTERFACE_PORT_RE.findall(inline.group(1))
+        if not inline_ports:
+            return None, []
+        return (
+            "TopModule",
+            [(d.lower(), abs(int(hi) - int(lo)) + 1 if hi else 1, name)
+             for d, hi, lo, name in inline_ports],
+        )
     m = re.search(r"module\s+named\s+(\w+)", text)
     return (m.group(1) if m else "TopModule"), ports
 
@@ -334,6 +371,60 @@ def module_ports(text: str, top: str | None = None) -> tuple[str | None, list[tu
         name = re.sub(r"\[[^\]]*\]", " ", decl).split()[-1]
         ports.append((direction, width, name))
     return m.group(1), ports
+
+
+def source_safety_warnings(source: str,
+                           ports: list[tuple[str, int, str]]) -> list[str]:
+    """Catch deterministic RTL hazards before spending a Vivado invocation.
+
+    This is intentionally narrow. It only diagnoses literal indices on ports
+    whose widths are known from the contract and `genvar` used in a procedural
+    loop. The compiler remains authoritative for all other syntax and semantics.
+    """
+    text = strip_comments(source)
+    widths = {name: width for _, width, name in ports if width > 0}
+    warnings: list[str] = []
+    for name, width in widths.items():
+        scalar = re.compile(rf"\b{re.escape(name)}\s*\[\s*(\d+)\s*\]")
+        for match in scalar.finditer(text):
+            index = int(match.group(1))
+            if index >= width:
+                warnings.append(
+                    f"literal index {index} is out of bounds for port "
+                    f"'{name}' with width {width} (valid indices 0..{width - 1})")
+        vector = re.compile(
+            rf"\b{re.escape(name)}\s*\[\s*(\d+)\s*:\s*(\d+)\s*\]")
+        for match in vector.finditer(text):
+            high, low = (int(value) for value in match.groups())
+            if max(high, low) >= width:
+                warnings.append(
+                    f"literal range [{high}:{low}] is out of bounds for port "
+                    f"'{name}' with width {width} (valid indices 0..{width - 1})")
+    if re.search(r"\balways(?:_ff|_comb)?\b[\s\S]{0,120}?\bbegin\b"
+                 r"(?:(?!\bend\b)[\s\S]){0,800}"
+                 r"\bfor\s*\(\s*genvar\b", text, re.I):
+        warnings.append(
+            "genvar appears in a procedural loop; use an integer loop variable "
+            "inside always, or move a generate-for to module scope")
+    return list(dict.fromkeys(warnings))
+
+
+def signed_arithmetic_warnings(source: str) -> list[str]:
+    """Catch common signed saturation encodings before tool execution."""
+    text = strip_comments(source)
+    warnings: list[str] = []
+    if re.search(r"\b\d+\s*'[sS][dD]\s*-\s*\d+\b", text):
+        warnings.append(
+            "invalid signed literal spelling: put unary minus before the "
+            "literal, for example -8'sd100, not 8'sd-100")
+    if (re.search(r"\b(?:sum|total|result|next|new_value)\b[\s\S]{0,100}"
+                  r"<\s*-\s*\d+", text, re.I)
+            and re.search(r"\b\d+\s*'[dD]\s*\d+\s*\+\s*"
+                          r"\d+\s*'[dD]\s*\d+", text)):
+        warnings.append(
+            "negative saturation branch uses unsigned sized addition; encode "
+            "the limit as a signed literal such as -8'sd100 or 8'h9c")
+    return list(dict.fromkeys(warnings))
 
 
 def _ports(text: str) -> tuple[str | None, list[tuple[str, int, str]]]:

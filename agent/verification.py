@@ -96,6 +96,11 @@ def parse_selftest(text: str, contract: Contract) -> SelfTest:
             raise ValueError(f"self-test field {field} must be a string")
     test = SelfTest(data["declarations"], data["stimulus"], data["coverage"],
                     str(data.get("uncertainties", "")))
+    # Vivado requires automatic tasks when they use ref arguments or recursive/
+    # re-entrant state. Normalizing the declaration keeps the checker portable
+    # without changing its stimulus or oracle.
+    test.declarations = re.sub(
+        r"\btask\s+(?!automatic\b)", "task automatic ", test.declarations)
     code = test.declarations + "\n" + test.stimulus
     # The model can supply a reference model and stimuli, not verdict machinery.
     forbidden = (r"\bagent_\w*\b|\bdut\b|\b(?:module|endmodule|initial|always"
@@ -136,9 +141,12 @@ def parse_selftest(text: str, contract: Contract) -> SelfTest:
         test.declarations = test.declarations[:start] + replacement + test.declarations[end:]
     if re.search(r"\b(?:task|function)\b[^;]*\bcheck\b", inspected):
         raise ValueError("self-test must not redefine check")
-    if not re.search(r"\bcheck\s*\(", test.stimulus):
+    if re.search(r"(?m)^\s*(?:integer|reg|wire|logic)\b", test.stimulus):
+        raise ValueError("declare all integer/reg/wire/logic helpers in declarations")
+    checker_source = strip_comments(test.declarations + "\n" + test.stimulus)
+    if not re.search(r"\bcheck\s*\(", checker_source):
         raise ValueError("self-test has no check calls")
-    actuals = re.findall(r"\bcheck\s*\(([^,;]*)", strip_comments(test.stimulus))
+    actuals = re.findall(r"\bcheck\s*\(([^,;]*)", checker_source)
     outputs = [n for d, _, n in contract.ports if d == "output"]
     if not any(re.search(rf"\b{re.escape(n)}\b", actual)
                for n in outputs for actual in actuals):
@@ -165,6 +173,9 @@ masks for the output bits being compared. Each call must check at least one bit.
 declarations: reference variables, localparams and helper tasks/functions only.
 NEVER redeclare the input/output ports; their exact names and widths are in the
 parsed contract. Declare all helper variables here, not halfway through a block.
+Every helper task must be declared as `task automatic`; do not use non-automatic
+tasks with `ref` arguments. Do not declare integer/reg/logic variables inside
+stimulus blocks or loops.
 stimulus: statements INSIDE an existing initial begin/end; no initial/module.
 Use # delays and explicit clock assignments; do not generate an always clock.
 Drive away from the sampling edge, sample after #1 for settled NBA values.
