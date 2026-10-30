@@ -5,6 +5,7 @@ import unittest
 from agent.oracles import from_spec
 from agent.spec_contract import extract_contract
 from agent.tools import RtlToolchain
+from agent.verification import SelfTest
 
 
 class VivadoOracleTests(unittest.TestCase):
@@ -28,6 +29,23 @@ class VivadoOracleTests(unittest.TestCase):
                      "module TopModule(input [14:0] in, output reg [3:0] out)",
                      "integer i; always @* begin out=0; for(i=0;i<15;i=i+1) out=out+in[i]; end",
                      "always @* out=0;")
+
+    def test_stimulus_local_declaration_after_controller_initialization(self):
+        header = "module TopModule(input a,b,output q);"
+        contract = extract_contract("q is a AND b", header, "TopModule")
+        checker = SelfTest("", """
+integer i;
+for(i=0;i<4;i=i+1) begin
+  a=i[0]; b=i[1]; #1;
+  check(q,a&b,1'b1,"truth table with a block-local loop variable");
+end
+""", "All four input pairs after controller input initialization")
+        for expression, expected in (("a&b", 0), ("a|b", 1)):
+            with self.subTest(expression=expression):
+                rc, log = self.rtl.simulate(
+                    header + f" assign q={expression}; endmodule",
+                    checker.render(contract), 90)
+                self.assertEqual(rc, expected, log)
 
     def test_galois_rejects_fibonacci_feedback(self):
         self.compare("""A Galois LFSR shifts right. A tap is XORed with q[0].

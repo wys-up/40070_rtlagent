@@ -69,7 +69,9 @@ module agent_tb;
 {self.declarations}
   initial begin
 {chr(10).join(init)}
+    begin : agent_stimulus
 {self.stimulus}
+    end
     if (agent_checks == 0) begin
       $display("AGENT_CHECKER_ERROR no comparisons executed");
       $fatal(1, "empty self-test");
@@ -109,6 +111,12 @@ def parse_selftest(text: str, contract: Contract) -> SelfTest:
     if match:
         raise ValueError("self-test contains forbidden control or DUT introspection: "
                          + match.group(0))
+    # Class-only qualifiers are invalid on module-scope helper routines. Reject
+    # them before spending another model call on review or launching Vivado.
+    if re.search(r"\b(?:local|protected|virtual)\s+"
+                 r"(?:(?:static|automatic)\s+)?(?:task|function)\b", inspected):
+        raise ValueError("self-test helpers are module scoped; use task/function "
+                         "without local, protected or virtual qualifiers")
     # Models often echo supplied ports. Drop equivalent standalone declarations;
     # reject width changes. Never normalize declarations inside helper routines.
     protected = [(m.start(), m.end()) for m in re.finditer(
@@ -165,6 +173,9 @@ zero, output wires, the DUT instance, a watchdog and a comparison task:
 All vector arguments are zero-extended to at least 1024 bits. Use explicitly sized
 masks for the output bits being compared. Each call must check at least one bit.
 declarations: reference variables, localparams and helper tasks/functions only.
+Helpers are module scoped, not class methods: use task automatic tick; begin
+#1; end endtask. Never use local/protected/virtual task or function qualifiers.
+End a standalone delay with a semicolon: #1; before end/endtask/endfunction.
 NEVER redeclare the input/output ports; their exact names and widths are in the
 parsed contract. Declare all helper variables here, not halfway through a block.
 stimulus: statements INSIDE an existing initial begin/end; no initial/module.

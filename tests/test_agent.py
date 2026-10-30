@@ -220,6 +220,26 @@ class SelfTestTests(unittest.TestCase):
         self.assertEqual(llm.chat.call_args.kwargs["timeout_s"], 9)
         self.assertEqual(llm.chat.call_args.kwargs["max_tokens"], 2048)
 
+    def test_class_only_helper_qualifiers_rejected_before_review(self):
+        for qualifier in ("local", "protected", "virtual"):
+            with self.subTest(qualifier=qualifier):
+                data = dict(TEST.__dict__)
+                data["declarations"] = (
+                    f"{qualifier} task tick; begin #1; end endtask")
+                llm = Mock()
+                llm.chat.return_value = LLMResult(json.dumps(data))
+                with self.assertRaisesRegex(ValueError, "module scoped"):
+                    generate_selftest(llm, "AND specification", INTERFACE,
+                                      self.contract, 9)
+                self.assertEqual(llm.chat.call_count, 1)
+
+    def test_module_scoped_automatic_helper_and_keyword_label_are_allowed(self):
+        data = dict(TEST.__dict__)
+        data["declarations"] = "task automatic settle; begin #1; end endtask"
+        data["stimulus"] = (
+            'a=1; b=1; settle(); check(q,1,1,"local task is only a label");')
+        parse_selftest(json.dumps(data), self.contract)
+
     def test_simulator_requires_positive_completed_verdict(self):
         rtl = tools.RtlToolchain()
         rtl.xvlog, rtl.xelab, rtl.xsim = "xvlog", "xelab", "xsim"
