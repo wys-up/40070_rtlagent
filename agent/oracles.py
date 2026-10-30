@@ -186,14 +186,18 @@ def _galois_lfsr(prompt: str, contract: Contract) -> SelfTest | None:
     return SelfTest(f"""
 integer i;
 reg [{width-1}:0] expected;
+reg [{width-1}:0] old_state;
 task sample_edge;
 begin
   #1;
+  old_state=expected;
   if(reset) expected={width}'d{seed};
   else if(expected[0]) expected=(expected >> 1) ^ {width}'h{tap_mask:x};
   else expected=expected >> 1;
   clk=1; #1;
-  check(q,expected,{width}'h{mask:x},$sformatf("Galois cycle=%0d reset=%0b",i,reset));
+  check(q,expected,{width}'h{mask:x},$sformatf(
+        "Galois old_state=%0h feedback=%0b taps=%0h cycle=%0d reset=%0b",
+        old_state,old_state[0],{width}'h{tap_mask:x},i,reset));
   clk=0; #1;
 end
 endtask
@@ -248,9 +252,13 @@ task step;
       lookup_index = predict_pc ^ ref_history;
       expected_taken = ref_pht[lookup_index][1];
       check(predict_taken, expected_taken, 1'b1,
-            $sformatf("prediction index=%0d", lookup_index));
+            $sformatf("prediction history_before=%0h pc=%0h index=%0d",
+                      history_before,predict_pc,lookup_index));
       check(predict_history, ref_history, 7'h7f,
-            $sformatf("history snapshot=%0h", ref_history));
+            $sformatf("history before=%0h predict=%0b train=%0b mispred=%0b "
+                      "taken=%0b train_history=%0h train_pc=%0h",
+                      history_before,predict_valid,train_valid,
+                      train_mispredicted,train_taken,train_history,train_pc));
     end
     clk=1'b1; #1;
     if (train_valid) begin

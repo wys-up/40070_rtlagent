@@ -248,6 +248,7 @@ class SpecificationOracleTests(unittest.TestCase):
             test = from_spec(prompt, contract)
             self.assertIsNotNone(test)
             self.assertIn(f"^ {width}'h{mask}", test.declarations)
+            self.assertIn("old_state=%0h feedback=%0b taps=%0h", test.declarations)
             self.assertIn(f"expected={width}'d{seed}", test.declarations)
             self.assertIn("synchronous reset off-edge holds", test.stimulus)
             for old, new in (("shifts right", "shifts left"),
@@ -276,6 +277,9 @@ class SpecificationOracleTests(unittest.TestCase):
         self.assertIn("Ordinary training must not block", test.stimulus)
         self.assertIn("overrides the younger", test.stimulus)
         self.assertIn("reset counter encoding is not assumed", test.uncertainties)
+        self.assertIn("history_before=%0h pc=%0h index=%0d", test.declarations)
+        self.assertIn("mispred=%0b", test.declarations)
+        self.assertIn("taken=%0b train_history=%0h", test.declarations)
         wrong_shape = extract_contract(
             prompt, interface.replace("[6:0] train_history", "[5:0] train_history"),
             "TopModule")
