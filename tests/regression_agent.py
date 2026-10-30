@@ -1,113 +1,180 @@
-"""Development-only regressions; this harness, not the agent, may use official TBs.
+"""Sequential development evaluation; official fixtures stay outside the agent.
 
-Run from repository root after sourcing the local model/Vivado environment:
-python3 -m tests.regression_agent --root /workspace/rtlagent2026 --real
+python3 tests/regression_agent.py --task-root /data/tasks --judge /data/selftest/judge.py \
+    --out outputs/batch --tasks Prob030_popcount255 Prob086_lfsr5
+
+Agent wall time includes its model and tools, but excludes the separate judge.
 """
 
 import argparse
+from collections import Counter
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
+import signal
 import subprocess
 import sys
 import time
 
-from agent.main import infer_top
-from agent.spec_contract import extract_contract, check_semantics
-from agent.tools import RtlToolchain, check_interface
-from agent.verification import SelfTest
+
+def write_json(path, value):
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n",
+                         encoding="utf-8")
+    temporary.replace(path)
+
+
+def run_logged(command, cwd, log_path, timeout):
+    started = time.monotonic()
+    error = None
+    rc = None
+    with log_path.open("w", encoding="utf-8") as log:
+        try:
+            proc = subprocess.Popen(command, cwd=cwd, stdout=log,
+                                    stderr=subprocess.STDOUT,
+                                    start_new_session=os.name == "posix")
+            try:
+                rc = proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                error = f"timeout after {timeout}s"
+                if os.name == "posix":
+                    try:
+                        os.killpg(proc.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                else:
+                    proc.kill()
+                rc = proc.wait()
+        except OSError as exc:
+            error = str(exc)
+    return dict(rc=rc, wall_s=round(time.monotonic() - started, 3), error=error)
+
+
+def summarize_trace(path):
+    events, errors = [], []
+    try:
+        for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            try:
+                event = json.loads(line)
+                if not isinstance(event, dict):
+                    raise ValueError("event is not an object")
+                events.append(event)
+            except ValueError as exc:
+                errors.append(f"line {line_no}: {exc}")
+    except OSError as exc:
+        errors.append(str(exc))
+    calls = [e for e in events if e.get("tool") == "llm" and "elapsed_s" in e
+             and not e.get("rc") and e.get("event") != "error"]
+    failed_calls = [e for e in events if e.get("tool") == "llm"
+                    and (e.get("rc") or e.get("event") == "error")]
+    timed_failures = [e for e in failed_calls if "elapsed_s" in e]
+    start = next((e for e in events if e.get("event") == "start"
+                  and e.get("tool") == "agent"), {})
+    return dict(accepted=any(e.get("event") == "accept" for e in events),
+                rounds=max((e.get("round", 0) for e in events), default=0),
+                model=start.get("llm"), errors=errors, events=len(events),
+                llm_calls=len(calls),
+                llm_wall_s=round(sum(e["elapsed_s"] for e in calls), 3),
+                llm_failed_calls=len(failed_calls),
+                llm_timed_failures=len(timed_failures),
+                llm_failed_wall_s=round(sum(e["elapsed_s"] for e in timed_failures), 3),
+                llm_recorded_wall_s=round(sum(e["elapsed_s"] for e in
+                                             calls + timed_failures), 3),
+                llm_purposes=dict(Counter(e.get("purpose", "rtl") for e in calls)),
+                checker_invalid=sum(e.get("tool") == "selftest" and
+                                    e.get("event") == "invalid" for e in events),
+                simulations=[{k: e[k] for k in ("round", "rc", "excerpt") if k in e}
+                             for e in events if e.get("tool") == "simulate"])
+
+
+def source_hashes(root):
+    paths = [p for directory in ("agent", "serve", "skill", "tests", "docs", "model")
+             for p in (root / directory).rglob("*") if p.is_file()]
+    paths += [root / name for name in ("run.sh", "run_baseline.sh", "baseline.py",
+              "Dockerfile", "requirements.txt", "manifest.json", "REPORT.md", "README.md")]
+    return {p.relative_to(root).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+            for p in sorted(paths) if p.is_file() and "__pycache__" not in p.parts
+            and p.suffix not in (".pyc", ".pyo")}
+
+
+def evaluate_task(agent_root, task, judge, out, agent_timeout, judge_timeout):
+    out.mkdir()
+    inputs = out / "input"
+    inputs.mkdir()
+    # Official task directories may contain ref.sv/tb.sv. Stage ONLY public inputs.
+    for name in ("prompt.txt", "interface.txt"):
+        if (task / name).is_file():
+            shutil.copyfile(task / name, inputs / name)
+    output = out / "agent"
+    output.mkdir()
+    started = time.monotonic()
+    agent = run_logged(["bash", str(agent_root / "run.sh"), str(inputs), str(output)],
+                       agent_root, out / "agent-runner.log", agent_timeout)
+    solution = output / "solution.v"
+    verdict_path = out / "verdict.json"
+    if solution.is_file() and solution.stat().st_size:
+        judgement = run_logged([sys.executable, str(judge), "--task", str(task),
+            "--solution", str(solution), "--outdir", str(out / "judge"),
+            "--json", str(verdict_path), "--timeout", str(judge_timeout)],
+            judge.parent, out / "judge-runner.log", judge_timeout + 30)
+        try:
+            verdict = json.loads(verdict_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            verdict = dict(error=str(exc))
+    else:
+        judgement = dict(rc=None, wall_s=0, error="missing or empty solution; judge not run")
+        verdict = dict(error=judgement["error"])
+    return dict(task=task.name, agent=agent, judge_process=judgement, judge=verdict,
+                total_wall_s=round(time.monotonic() - started, 3),
+                solution_sha256=hashlib.sha256(solution.read_bytes()).hexdigest()
+                    if solution.is_file() else None,
+                trace=summarize_trace(output / "trace.jsonl"))
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--root", type=Path, default=Path.cwd())
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--agent-root", type=Path, default=Path(__file__).resolve().parents[1])
+    parser.add_argument("--task-root", type=Path, required=True)
+    parser.add_argument("--judge", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--real", action="store_true")
-    parser.add_argument("--skip-tools", action="store_true",
-                        help="reuse an earlier real-tool gate validation")
-    parser.add_argument("--tasks", nargs="+", default=[
-        "Prob030_popcount255", "Prob042_vector4", "Prob066_edgecapture",
-        "Prob107_fsm1s", "Prob122_kmap4", "Prob134_2014_q3c", "Prob145_circuit8"])
+    parser.add_argument("--tasks", nargs="+", required=True)
+    parser.add_argument("--source-revision", default="unrecorded")
+    parser.add_argument("--agent-timeout", type=int, default=935)
+    parser.add_argument("--judge-timeout", type=int, default=330)
     args = parser.parse_args()
-    args.out.mkdir(parents=True, exist_ok=True)
-    root = args.root
-    hashes = {}
-    for path in sorted((root / "example/agent").rglob("*")):
-        if path.is_file() and path.suffix in (".py", ".md"):
-            hashes[str(path.relative_to(root))] = hashlib.sha256(path.read_bytes()).hexdigest()
-    (args.out / "source-hashes.json").write_text(json.dumps(hashes, indent=2))
-    tasks = root / "tasks/veval_v2_clean/tasks"
-    old = root / "outputs/realmodel-20261026-050723/agent"
-    static = []
-    for task in sorted(tasks.iterdir()):
-        solution = old / task.name / "s0/solution.v"
-        if not solution.exists():
-            continue
-        prompt = (task / "prompt.txt").read_text()
-        source = solution.read_text()
-        contract = extract_contract(prompt, "", infer_top("", prompt))
-        rc, msg = check_interface(source, "", prompt)
-        semantic_rc, semantic = check_semantics(source, contract)
-        static.append(dict(task=task.name, interface_rc=rc, interface=msg,
-                           semantics_rc=semantic_rc, semantics=semantic,
-                           contract=contract.to_dict()))
-    (args.out / "static.json").write_text(json.dumps(static, indent=2))
-    print("STATIC", json.dumps({k: [s["task"] for s in static if s[k]]
-                               for k in ("interface_rc", "semantics_rc")}), flush=True)
-    rtl = RtlToolchain(str(args.out / "tool-checks"))
-    tool_results = []
-    for index, task in enumerate([] if args.skip_tools else [
-            "Prob030_popcount255", "Prob133_2014_q3fsm",
-            "Prob153_gshare", "Prob155_lemmings4"], 1):
-        rtl.round = index
-        source = (old / task / "s0/solution.v").read_text()
-        rc, log = (rtl.lint(source, "TopModule", 90) if index == 1
-                   else rtl.synth(source, "TopModule", 150))
-        tool_results.append(dict(task=task, rc=rc, log=log))
-        print("WARNING_GATE", task, rc, log[:400], flush=True)
-    # Exercise the controller-owned comparison/verdict with the actual simulator.
-    contract = extract_contract("", "module TopModule(input a, output q);", "TopModule")
-    test = SelfTest("", '#1; a=1; #1; check(q,1,1,"a=1");', "both logic values")
-    for label, expression in ([] if args.skip_tools else (("bad", "~a"), ("good", "a"))):
-        rtl.round += 1
-        rc, log = rtl.simulate(
-            f"module TopModule(input a,output q);assign q={expression};endmodule",
-            test.render(contract), 90)
-        tool_results.append(dict(task="simulation_" + label, rc=rc, log=log))
-        print("SIMULATOR", label, rc, log[-500:], flush=True)
-    (args.out / "tool-results.json").write_text(json.dumps(tool_results, indent=2))
-    if not args.real:
-        return
+    root, tasks, judge, out = (p.resolve() for p in
+                              (args.agent_root, args.task_root, args.judge, args.out))
+    if (len(set(args.tasks)) != len(args.tasks)
+            or any(Path(n).name != n or n in (".", "..") for n in args.tasks)):
+        parser.error("task names must be unique direct child directory names")
+    if not (root / "run.sh").is_file() or not judge.is_file():
+        parser.error("agent run.sh and judge.py must exist")
+    for name in args.tasks:
+        if not (tasks / name / "prompt.txt").is_file():
+            parser.error(f"missing prompt.txt for {name}")
+    # Refuse reused result directories: stale verdicts must never appear as new passes.
+    out.mkdir(parents=True, exist_ok=False)
+    write_json(out / "metadata.json", dict(
+        started_utc=datetime.now(timezone.utc).isoformat(), source_revision=args.source_revision,
+        agent_root=str(root), task_root=str(tasks), judge=str(judge), tasks=args.tasks,
+        judge_sha256=hashlib.sha256(judge.read_bytes()).hexdigest(),
+        source_sha256=source_hashes(root),
+        limits=dict(agent_s=args.agent_timeout, judge_s=args.judge_timeout),
+        timing="sequential; agent includes model/tools; judge measured separately",
+        environment={k: v for k, v in os.environ.items()
+                     if k.startswith("AGENT_") or k in ("LLM_BACKEND", "LLM_MODEL")}))
     results = []
     for name in args.tasks:
-        out = args.out / "real" / name
-        out.mkdir(parents=True, exist_ok=True)
-        start = time.monotonic()
-        with (out / "runner.log").open("w") as log:
-            proc = subprocess.run(
-                ["bash", str(root / "example/run.sh"), str(tasks / name), str(out)],
-                cwd=root, stdout=log, stderr=subprocess.STDOUT, timeout=920)
-        judge = subprocess.run(
-            [sys.executable, str(root / "selftest/judge.py"),
-             "--task", str(tasks / name), "--solution", str(out / "solution.v"),
-             "--outdir", str(out / "judge"), "--json", str(out / "verdict.json"),
-             "--timeout", "330"], cwd=root, capture_output=True, text=True,
-            timeout=400)
-        (out / "judge-runner.log").write_text(judge.stdout + judge.stderr)
-        try:
-            verdict = json.loads((out / "verdict.json").read_text())
-        except (ValueError, OSError):
-            verdict = {"error": judge.stdout[-2000:] + judge.stderr[-2000:]}
-        events = [json.loads(line) for line in (out / "trace.jsonl").read_text().splitlines()]
-        item = dict(task=name, agent_rc=proc.returncode, judge=verdict,
-                    wall_s=round(time.monotonic() - start, 2),
-                    accepted=any(e.get("event") == "accept" for e in events),
-                    rounds=max([e.get("round", 0) for e in events]),
-                    simulations=[e for e in events if e.get("tool") == "simulate"])
-        results.append(item)
-        (args.out / "real-results.json").write_text(json.dumps(results, indent=2))
-        print("REAL", json.dumps(item), flush=True)
+        print("START", name, flush=True)
+        result = evaluate_task(root, tasks / name, judge, out / name,
+                               args.agent_timeout, args.judge_timeout)
+        results.append(result)
+        write_json(out / "results.json", results)
+        print("RESULT", json.dumps({k: result[k] for k in
+              ("task", "agent", "judge_process", "judge")}), flush=True)
 
 
 if __name__ == "__main__":

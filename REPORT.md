@@ -1,243 +1,219 @@
 # RTL track 设计报告
 
-| 项目 | 内容 |
-| --- | --- |
-| Track | RTL |
-| 版本日期 | 2026-10-26 |
+版本日期：2026-10-30。
 
 ## 1. 方案概述
 
-本方案在断网环境中使用本地开源模型完成单题 RTL 生成，并把接口、语义、编译、综合
-和自我验证结果纳入多轮修复。方案优先保证接口和可综合性，同时通过独立检查器争取
-把 L1 提升到 L2/L3。单题默认最多五轮，方案和基线使用同一模型、同一上下文和同一
-推理服务。
+使用本地开源模型生成可综合 RTL，以接口检查、Vivado 工具反馈和独立自检驱动有界修复。
+目标是在单卡 32 GB 和单题 900 秒预算内保留证据最好的候选。能力与增益按独立判题统计，
+未完成的全量结果不作成绩声明。
 
 ## 2. 总体架构
 
 ```text
-prompt.txt
-    |
-    v
-规格/接口提取 -> 技能注入 -> 本地 llama.cpp -> 代码抽取
-    ^                                      |
-    |                                      v
-    +-- 失败摘要 <--- 接口/语义/lint/synth/self-test
-                                           |
-                                           v
-                                  solution.v + trace.jsonl
+prompt/interface → 规格提取 → 技能路由 → 本地模型 → RTL 候选
+                     ↑                            ↓
+                     └────── 错误摘要 ← 接口/语义/编译/综合/自检
+                                                  ↓
+                                       solution.v + trace.jsonl
 ```
 
-`serve/start.sh` 是唯一启动常驻推理服务的位置；`run.sh` 只处理单题。工具链反馈经过
-摘要后回灌模型，候选按接口、明确语义、编译、综合和自检证据排序，坏候选不会覆盖已有
-的更好候选。
-
-### 2.1 设计依据
-
-接口错误会直接导致 L0，因而先做低成本接口检查；随后才调用 Vivado 编译、综合和
-仿真。参考测试台不下发，自我验证控制器只使用 prompt/interface，生成独立 testbench
-并做逐拍比较，不读取候选 RTL、官方 `ref.sv` 或官方测试台。
+先执行低成本接口与明确语义检查，再调用 Vivado。失败反馈进入下一轮模型请求。
+参考实现和官方测试台仅供外部判题，不进入 agent 输入。
 
 ## 3. 模型与推理栈
 
-### 3.1 最终模型
-
-| 项目 | 内容 |
+| 项目 | 配置 |
 | --- | --- |
 | 模型 | `Qwen/Qwen2.5-Coder-32B-Instruct-GGUF` |
-| 来源与版本 | Hugging Face，文件页面提交 `6ad0cdf` |
+| 来源版本 | Hugging Face 文件页面提交 `6ad0cdf` |
 | 文件 | `qwen2.5-coder-32b-instruct-q4_k_m.gguf` |
 | SHA-256 | `4d64b316b5e6319d9613e0d97935d9ebd631fc7e334da400d00085eca749d085` |
-| 量化 | GGUF Q4_K_M |
-| 参数量 | 32.76B |
-| 实测显存 | 25.1 GiB，单卡 |
-| `max_model_len` | 24576 |
-| 单次输出上限 | 16384 |
-| RoPE | 无外推 |
+| 量化 / 参数量 | GGUF Q4_K_M / 32.76B |
+| 验证显存 | 25.1 GiB，单卡；硬件为 W7900D 48 GiB 验证卡 |
+| 上下文 / 单次输出上限 | 24576 / 16384 token |
+| 思考 / RoPE | `enable_thinking=false` / 无外推 |
+| 推理后端 | llama.cpp `0.4.0-dev`，commit `f114f91` |
+| 启动参数 | `-ngl 999 -c 24576 -np 1 -sm none -mg 0 --jinja` |
+| 微调 / 辅助模型 | 无 / 无 |
 
-### 3.2 模型选择
-
-实际使用的是验证实例中已有的 Qwen2.5-Coder-32B-Instruct GGUF。未选择未量化 32B
-权重，因为约 64 GB 的 FP16 权重不满足单卡 32 GB 约束；没有继续保留模板中的
-Qwen3-8B 声明，因为它与实际验证服务不一致。
-
-### 3.3 微调与辅助模型
-
-未微调。无辅助模型。
-
-### 3.4 推理栈
-
-使用镜像已有的 `llama.cpp 0.4.0-dev`，commit `f114f91`。关键参数为
-`-ngl 999 -c 24576 -np 1 -sm none -mg 0 --jinja`，服务监听 `127.0.0.1:8000`，
-单卡单并发。验证实例当前服务由 `/workspace/rtlagent-config/start_model.sh` 启动；
-提交目录中的 `serve/vllm.sh` 复用同一命令配置，文件名只是既有目录契约的兼容名称。
+选用已有验证服务提供的代码模型与量化文件，以满足显存和离线部署要求。
+未完成多模型同题对照。详细声明见 [MODEL.md](model/MODEL.md)。
+方案与赛事方原版基线共用模型、量化、上下文、思考设置及推理服务；
+基线采样参数保持赛事方原样，agent 默认 temperature 为 0.2。
 
 ## 4. 智能体设计
 
 ### 4.1 控制流
 
-`agent/main.py::solve_agent` 读取题面，提取模块接口与复位/时序约束，组装系统提示、
-技能和上一轮错误摘要，调用本地模型，抽取 Verilog，再执行接口、语义、lint、综合和
-自我验证。通过条件要求有非零比较、无失配、无 unknown expected/mask、无超时；否则
-继续修复或返回证据最好的候选。
+提取接口、复位和任务范围，选择技能并请求模型生成 RTL。候选依次经过接口、语义、
+编译、综合和功能自检。自检接受要求非零比较、无失配、无未知期望值并正常完成。
+达到自检接受、耗尽预算或无法形成有效检查器时结束。
 
 ### 4.2 重试与回退
 
-默认最多五轮。每轮按剩余墙钟预算收紧模型与工具超时；源码去重、错误指纹规范化和
-从原规格重新生成用于避免在坏候选上反复局部修补。新候选证据更差时保留旧候选。
+最多五轮，按剩余预算收紧请求和工具超时。候选去重、重复错误指纹及从原规格重新生成
+用于限制局部修补循环。接口、明确语义、编译、综合和功能证据逐级排序，更优候选立即
+原子落盘；较差候选不覆盖已有结果。预算与进程回收见
+[时限说明](docs/DEADLINE_FALLBACK.md)。
 
 ### 4.3 上下文管理
 
-模型完整回复、候选、检查器和工具日志均落盘；回灌模型的工具日志由
-`tools.py::summarize_log()` 保留错误、综合完成等关键行并限制长度，避免把数千行
-Vivado 日志直接占满上下文。
+保存模型回复、候选、检查器与工具日志。回灌日志保留错误、危险警告和完成标志并限制长度。
+重复失败时可省略旧 RTL，要求从原规格重新推导。trace 分别记录请求阶段、耗时、
+token、错误和工具返回值；失败请求不伪造 token 用量。
 
 ### 4.4 自我验证
 
-控制器根据题面构造 DUT 例化、比较任务、计数器和 watchdog。对可识别的 population
-count、符号扩展、K-map、组合状态表、Moore 表、sticky 下降沿捕获和波形表使用程序化
-检查器；其它题目由同一模型生成检查器后再复核。模型检查器错误与 DUT 功能错误分开
-记录，不能仅凭编译或综合通过接受候选。
+程序化路径只转换当前题面的显式 K-map、状态/转移表和波形值，不保存电路类型的算法答案。
+其它规格由同一模型独立生成 checker；生成器和复核器均不读取候选 RTL。
+复核仅返回严格批准或具体问题，批准后冻结 checker 哈希；拒绝则独立重建，最多三次。
+checker 生成/复核输出分别最多 2048/512 token。
+
+控制器提供 DUT 例化、比较计数和 watchdog。模型 checker 通过受限语法检查，
+禁止遮蔽 DUT 端口、执行说明字段或用未知值通过检查。无有效 checker 时保留已有候选，
+不标记功能接受。自检与官方判题独立。
 
 ## 5. 技能包
 
-技能包括 `rtl-module-interface-contract` 和 `rtl-sequential-timing`，另有
-`skill/README.md`。前者约束模块名、端口名、方向、位宽、头部语法和测试台内容；
-后者覆盖同步/异步复位、非阻塞赋值、状态更新和时序语义。根据真实失败样本增加了
-非连续复位措辞路由、组合 next-state 题不注入时序模板，以及有意 latch/规定初值
-的例外。
+| 技能 | 解决的问题 |
+| --- | --- |
+| 接口契约 | 模块、端口、方向、位宽与声明修复 |
+| 通用时序 | 采样边沿、非阻塞赋值、复位与重叠 |
+| 算术位宽 | 中间结果截断、符号与索引越界 |
+| FSM 输出周期 | 当前状态/输入依赖与额外输出延迟 |
+| 分支预测 | 按规格区分索引来源、训练和恢复优先级 |
+| 串行接收 | 位序、帧边界、完成周期与错误恢复 |
+| 移位/反馈寄存器 | 拓扑、方向、抽头编号与控制优先级 |
 
-危险警告由工具链拦截，包括越界、VRFC 10-3705、Synth 8-6858/6859、多驱动和非预期
-锁存；题面明确要求 latch 时继续进入功能检查。开发回归中 Prob030、133、153、155
-的危险警告均被新 gate 阻断。
+规则由编译警告、逐拍失配和 checker 协议错误归纳。典型现象包括
+`VRFC 10-3705` 越界、`Synth 8-6858/6859` 多驱动、旧状态比较导致输出晚一拍。
+技能提供当前规格的推导步骤，不包含固定模式检测器或具体题目的次态答案。
+每轮按题面与日志选择最多两条，领域匹配优先于通用时序匹配。
+路由和协议由回归覆盖；尚无最终版本技能开关消融，不宣称单项技能的通过率增益。
 
 ## 6. 实测结果
 
-### 6.1 环境与范围
+### 6.1 环境与数据范围
 
-远程实例为 AMD Radeon Pro W7900D 48 GiB，Vivado 2026.1，目标器件
-`xczu3eg-sbva484-1-e`，5 ns。服务器完整 unittest 为 46 项，其中包含 7 类 Vivado
-oracle 集成测试；日志在 `outputs/agent-fix-20261026/unittest.log`。
+验证环境为 AMD Radeon Pro W7900D，Vivado 2026.1，目标器件
+`xczu3eg-sbva484-1-e`，5 ns。模型设置与第 3 节一致，顺序调用单并发服务。
 
-以下是 7 道指定开发回归，不是 VerilogEval v2 全量统计，也不是 pass@k：
+已核对的任务目录共 163 道：145 道筛选公开题、1 道另存公开题、6 道示例、
+8 道边界开发题和 3 道专项开发题。各集合分开报告；归档运行记录不重复计入。
+最终快照逐题重新生成一次，再独立调用官方 judge。
 
-| 级别 | 方案题数 |
-| --- | ---: |
-| L0 | 0 |
-| L1 | 1 |
-| L2 | 0 |
-| L3 | 6 |
+### 6.2 验证状态
 
-指定样本题集得分为 `(6 + 0.2) / 7 = 0.8857`。该数字只描述上述 7 道回归，不能外推
-为全量 145/156 题得分；基线未在同一批次完成，故不填写增益。
+Windows 单元测试 78 项，68 项通过、10 项因 Linux/Vivado 环境跳过。
+最终运行源码 `422b7e9` 的 Linux/Vivado 测试 83 项全部通过、无跳过，
+测试耗时 87.886 秒。七条技能均通过格式验证。
+源码与日志校验和见[验证数据](docs/submission_validation_20261030.json)。
 
-| 题目 | 原始等级 | 修复后 | 官方失配/样本 |
-| --- | --- | --- | --- |
-| Prob030_popcount255 | L1 | L3 | 0/215 |
-| Prob042_vector4 | L0 | L3 | 0/100 |
-| Prob066_edgecapture | L1 | L3 | 0/266 |
-| Prob107_fsm1s | L1 | L3 | 0/230 |
-| Prob122_kmap4 | L1 | L3 | 0/232 |
-| Prob134_2014_q3c | L1 | L3 | 0/200 |
-| Prob145_circuit8 | L1 | L1 | 176/240 |
+该固定快照的 163 题全量评测已启动，逐题串行生成并独立判题。
+全量判级、L3 通过率、基线对比与总墙钟尚未完成；不填入历史版本成绩。
+每题只采样一次，未测 pass@5。没有同批基线结果，归一化增益不作计算。
 
-### 6.2 代价
+### 6.3 时间与结果口径
 
-没有完成全题集墙钟汇总。已确认单题模型请求和 Vivado 工具均受剩余预算约束，服务
-启动只在 `serve/start.sh` 中等待就绪；正式评测应按同一 `run.sh`/`run_baseline.sh`
-口径重新记录平均和最长时间。
+agent 墙钟包含模型、EDA、自检及修复；外部 judge 单独计时。
+开发入口直接调用 `run.sh`，不包含 HTTP 排队与外部查询传输。
+历史样本与源码、结果哈希见[历史验证记录](docs/VALIDATION_20261030.md)，
+不并入最终快照统计。
 
 ## 7. 复现说明
 
-### 7.1 构建
+### 7.1 构建与启动
+
+`BASE_IMAGE` 传入赛事方公布且包含 ROCm、Vivado 与推理运行时的镜像。
+模型文件在断网前按 [MODEL.md](model/MODEL.md) 的 revision 与 SHA-256 准备。
 
 ```bash
-docker build --build-arg BASE_IMAGE=<announced-official-image> -t rtlagent .
+docker build --build-arg BASE_IMAGE=<official-image> -t rtl-agent .
 ```
 
-模型文件不进 Git。按本报告的仓库、revision、文件名和 SHA-256 在断网前准备权重，
-并挂载到 `/models/qwen2.5-coder-32b-instruct-q4_k_m.gguf`。
+容器内将权重挂载到 `/models`，按[服务说明](serve/README.md)设置环境并运行
+`serve/start.sh`。该脚本启动常驻模型；单题入口不启动模型服务。
+对外投题额外运行 `serve/run_api.sh start`、`check` 和平台隧道。
 
-### 7.2 启动
+### 7.2 单题与基线
 
 ```bash
-export MODEL_FILE=/models/qwen2.5-coder-32b-instruct-q4_k_m.gguf
-./serve/start.sh
-export LLM_BACKEND=openai
-export LLM_BASE_URL=http://127.0.0.1:8000/v1
-export LLM_MODEL=qwen2.5-coder-32b-instruct-q4_k_m.gguf
-export LLM_API_KEY=dummy
+bash run.sh <input_dir> <agent_output_dir>
+bash run_baseline.sh <input_dir> <baseline_output_dir>
 ```
 
-### 7.3 单题与基线
+输入目录包含 `prompt.txt` 和可选 `interface.txt`；输出目录包含 `solution.v`
+及 `trace.jsonl`。基线为赛事方原版文件，单次生成、零工具和零技能调用。
+
+### 7.3 自测与判题
 
 ```bash
-./run.sh <input_dir> <output_dir>
-./run_baseline.sh <input_dir> <output_dir>
+python3 -m unittest discover -s tests -v
+python3 tests/regression_agent.py \
+  --task-root /data/tasks --judge /data/selftest/judge.py \
+  --out outputs/evaluation --source-revision <commit> \
+  --agent-timeout 935 --judge-timeout 330 --tasks <task-directory-names>
 ```
 
-两者都访问同一个本地 OpenAI 兼容服务，使用 manifest 声明的 `enable_thinking=false`
-和 24576/16384 上下文配置；基线只发一次模型请求，不调用 agent 工具。
-
-### 7.4 自测
-
-```bash
-source /workspace/rtlagent-config/agent.env
-bash selftest/run_selftest.sh --check
-bash selftest/run_selftest.sh --reference
-python3 -m unittest discover -s example/tests -v
-```
-
-已完成 `--check` 所需工具核查和 reference 链路核查；完整全量方案/基线评测未完成。
-
-### 7.5 断网依赖
-
-模型权重、llama.cpp、Python 依赖和 Vivado 必须在断网前准备好；服务只监听
-`127.0.0.1`，临时目录使用 `/var/tmp`，不在启动时下载或联网。Vivado 授权变量由
-环境配置提供。
+第二条命令需要额外提供赛事题库与 judge，本方案包不包含 `selftest/`。
+评测器仅向 agent 复制公开输入，参考实现与测试台留给独立 judge；输出目录须为新目录。
+模型权重、Python 依赖、Vivado 授权及 llama.cpp 均须在离线运行前准备就绪。
 
 ## 8. 失败分析
 
-### 8.1 仍未解决的类型
+下列现象来自带版本的历史开发样本，用于说明机制，不代表最终版本的失败数量。
 
-| 类型 | 卡级 | 原因 |
-| --- | --- | --- |
-| 透明锁存/波形表题 | L1/L2 | 模型仍会把透明 latch 误写成边沿触发或组合逻辑，checker 能发现反例但不能替模型完成正确改写 |
-| 复杂时序语义题 | L1 | 同步复位、采样历史和非阻塞赋值的周期边界容易被模型错解 |
-| 题面信息复杂或非标准格式 | L0/L1 | 受限规格解析器无法构造可靠 checker 时只能退回编译/综合证据 |
+| 现象 | 机制与影响 |
+| --- | --- |
+| 波形/复杂时序题停在 L1 | 模型混淆透明保持、边沿采样及输出观察周期，结构正确也可能逐拍失配 |
+| 复杂控制并发错误 | 一个寄存器的使能或恢复条件被错误用于屏蔽其它寄存器更新 |
+| 无效或被拒绝的 checker | 检查写入说明字段、复核响应无效或预算耗尽，导致无法取得自检判定 |
+| 多轮重复同一错误 | 缺少新反例或规格被持续误解，增加轮数主要增加墙钟 |
 
-### 8.2 无效尝试
+综合通过不能替代功能判定。候选参与期望值构造会破坏独立性，因此生成器与复核器
+不接收候选 RTL。固定电路算法及具体模式实现已从运行路径和技能删除；
+保留通用检查流程，不通过放宽 checker 验收来提高表面接受率。
 
-| 做法 | 结果 | 原因 |
-| --- | --- | --- |
-| 只增加重试轮数 | 墙钟增加，功能错误基本不变 | 没有新的功能 oracle，模型会重复错误解释 |
-| 综合通过即接受 | 会误收 Prob030 等功能错误 | L3 只说明可综合，不能证明逐拍行为正确 |
-| 让 checker 读取候选 RTL 或官方参考 | 被禁止且会产生泄漏 | 正式自检只从 prompt/interface 构造 |
+局限包括：受限解析器只能处理部分规格格式；同模型生成与复核可能共享误解；
+独立 checker 的覆盖不足仍可能漏检。环境验证尚不等于干净镜像重建、完整 HTTP
+900 秒边界或连续数百请求的验收。
 
-### 8.3 边界
+## 9. 工程实现特点
 
-程序化 checker 只覆盖声明的规格格式，同一模型生成的通用 checker 不是形式化证明。
-当前结果也未覆盖全部失败样本、92 个旧 L3 样本的重新生成或每题五次采样。模型更换、
-上下文缩短、单卡显存超过 32 GB 或目标环境缺少离线依赖时，运行结果不可直接复现。
+1. **规格独立验证**：checker 生成与候选生成隔离，复核后冻结哈希；回归覆盖未批准不执行。
+2. **证据分级保留**：新候选失败不覆盖旧结果；回归覆盖截断、接口错误和超时回退。
+3. **阶段可观测性**：模型与工具分阶段记录，区分 checker 无效、DUT 失配和官方判定。
 
-## 9. 大模型协作记录
+这些是已验证的工程机制；性能收益以最终同版本题库和基线对照为准。
 
-开发阶段使用 Codex（GPT-5 系列，Codex desktop）和远程终端工具协助阅读仓库、定位
-失败、修改 agent/skill、核对模型服务配置和执行测试。运行时方案只使用本地
-Qwen2.5-Coder-32B-Instruct GGUF，不使用商用 API 或外部检索。
+## 10. 结论与后续验证
 
-来自模型的有效建议包括：按接口/编译/综合/自检证据排序候选；把模型检查器错误与
-DUT 错误分开；对综合日志做关键行摘要；用单卡、固定上下文和基线共用服务；把
-`start.sh` 作为唯一常驻进程入口。队伍自己的判断是保留现有 controller、技能边界、
-题面独立性和官方 judge 不变，并拒绝把未完成的全量结果写成成绩。
+本方案具备离线本地推理、Vivado 工具闭环、严格自检协议、时限控制和可追溯产物。
+最终题库通过率与归一化增益尚无完整数据。优先完成固定快照全量与同批基线，
+再按跨题失效机制评估 checker 覆盖和时限分配。
 
-错误或不适用的建议也被实测纠正：模板中的 Qwen3-8B/vLLM/32768 配置与服务器实际
-llama.cpp、GGUF 文件和 24576 上下文不一致；初期“综合通过即可接受”会放过
-Prob030 功能错误；Prob145 的波形 checker 能拒绝错误候选但不能自动生成正确 latch。
-这些问题通过 `curl /v1/models`、模型 SHA-256、`start_model.sh status`、Vivado
-2026.1 真实仿真/综合、46 项 unittest 和 7 道官方 judge 回归发现。
+## 11. 参考资料
 
-## 10. 版本与复核边界
+- [赛事接口契约](docs/API_CONTRACT.md)。
+- [Qwen2.5-Coder GGUF 权重](https://huggingface.co/Qwen/Qwen2.5-Coder-32B-Instruct-GGUF)，revision 与校验和见模型声明。
+- NVIDIA VerilogEval v2，开发题集固定来源提交 `c498220d0a52248f8e3fdffe279075215bde2da6`。
+- [Pi](https://github.com/earendil-works/pi)、[OpenCode](https://github.com/anomalyco/opencode)、[Hermes](https://github.com/NousResearch/hermes-agent)：精确 revision 和借鉴范围见[来源记录](docs/OPEN_SOURCE_PATTERNS.md)。
 
-远程实例当前提交包含本报告对应的代码与声明；模型文件不提交到 Git。Gitee 推送曾因
-TLS/SSH 公钥问题失败，最终封存前仍需在可访问的 Gitee 或 GitHub 私有仓库完成推送
-并邀请赛事方协作者。
+## 12. 大模型协作记录
+
+开发阶段使用 Codex desktop 与远程终端辅助阅读、修改和执行测试；运行时仅使用
+第 3 节声明的本地 Qwen 模型。控制流、验证边界与保留策略经工具测试和人工审查确认。
+
+有效建议包括候选分级保留、checker 错误与 DUT 错误分离、严格 JSON 复核和有界恢复，
+对应协议、超时与 Vivado 回归。错误建议包括把固定电路行为模型视作通用自检，
+以及在技能中保留具体模式的实现；最终源码审查发现后删除，重新冻结评测快照。
+验证依据为源码差异、单元/集成测试、独立 judge 与保留的 trace，不能以模型自评替代。
+
+## 13. 附录
+
+- 控制流：`agent/main.py`；自检协议：`agent/verification.py`；工具链：`agent/tools.py`。
+- 当前清理范围、测试与源码版本：[REMOVAL_AUDIT_20261030.md](docs/REMOVAL_AUDIT_20261030.md)。
+- 历史逐题判级与来源哈希：[VALIDATION_20261030.md](docs/VALIDATION_20261030.md) 和
+  [validation_20261030.json](docs/validation_20261030.json)。
+- 完整模型回复、候选与工具日志保存在评测输出目录，运行产物不提交 Git。

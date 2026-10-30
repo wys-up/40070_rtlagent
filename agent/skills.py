@@ -1,40 +1,8 @@
-"""Skill pack loading and selection.
+"""Load SKILL.md files and select at most two skills per generation round.
 
-Follows the format of AMD's official Vitis HLS agent skills, so a skill from
-that pack can be dropped into skill/ and used unchanged:
-
-    ---
-    name: hls-flattenable
-    description: one line, no block scalar
-    ---
-
-    <!-- copyright -->
-
-    # Agent Skill: ...
-
-    ## Skill Metadata
-    - **Name:** ...
-    - **Description:** ...
-    - **Trigger:** prose, when a human would reach for this
-    - **Log signatures:** `HLS 214-157`, `undefined symbol`      <- see below
-
-Front matter carries `name` and `description` only. Everything else lives in the
-body, which is why the loader reads the Skill Metadata bullets.
-
-`**Log signatures:**` is an addition, not part of the official format. Official
-skills are selected by an agent that has read their descriptions; this agent
-selects by matching tool output, and prose triggers ("User asks whether loops are
-flattenable") do not appear in a synthesis log. Backticked items on that line are
-matched literally against the log. A skill without the line is still loaded and
-can still be selected by name -- it just never auto-fires on an error.
-
-Selection is deliberately dumb. A model-driven router would be more flexible but
-costs a round trip, and a wrong route is expensive under a wall clock budget.
-Start dumb; earn the complexity.
-
-Injecting every skill every round is the failure mode to avoid. Skill bodies run
-to thousands of tokens; five of them crowd out the error log they are meant to
-help interpret.
+Front matter supplies name and description. Backticked Log signatures are
+matched case-insensitively against the task statement and previous tool feedback.
+A broad sequential-timing fallback has lower priority than direct matches.
 """
 
 from __future__ import annotations
@@ -54,30 +22,22 @@ class Skill:
         self.path = path
 
     def matches(self, *texts: str) -> bool:
+        return self.match_score(*texts)[0] > 0
+
+    def match_score(self, *texts: str) -> tuple[int, int]:
         if not self.signatures:
-            haystack = "\n".join(t.lower() for t in texts if t)
-            if self.name == "rtl-wide-reduction":
-                return bool(re.search(
-                    r"\b(population count|popcount|count the number of .*bits|"
-                    r"number of bits equal to 1)\b", haystack))
-            if self.name == "rtl-kmap-truth-table":
-                return bool(re.search(r"\b(karnaugh|k-map|truth table)\b", haystack))
-            return False
+            return (0, 0)
         haystack = "\n".join(t.lower() for t in texts if t)
-        if any(sig.lower() in haystack for sig in self.signatures):
-            return True
-        if self.name == "rtl-combinational-scope" and re.search(
-                r"\b(?:output|signal|portion|logic)\b.{0,100}"
-                r"\b(?:purely|entirely|only)\s+combinational\b|"
-                r"\b(?:purely|entirely)\s+combinational\s+module\b",
-                haystack):
-            return True
+        hits = [sig for sig in self.signatures if sig.lower() in haystack]
+        if hits:
+            return (2 + len(hits), max(map(len, hits)))
         if self.name == "rtl-sequential-timing":
-            return bool(re.search(
+            broad_match = bool(re.search(
                 r"\b(?:synchronous|asynchronous|posedge|negedge|moore|mealy|"
                 r"state machine|finite.state|clock edge|rising edge|falling edge|"
                 r"serial|counter|shift register)\b", haystack))
-        return False
+            return (1, 0) if broad_match else (0, 0)
+        return (0, 0)
 
     def render(self, budget: int = 12000) -> str:
         return f'<skill name="{self.name}">\n{_trim(self.body, budget)}\n</skill>'
@@ -113,7 +73,10 @@ def load_skills(skill_dir: str) -> list[Skill]:
 
 
 def select(skills: list[Skill], *context: str, limit: int = 2) -> list[Skill]:
-    return [s for s in skills if s.matches(*context)][:limit]
+    matched = [(s.match_score(*context), s) for s in skills]
+    matched = [(score, skill) for score, skill in matched if score[0] > 0]
+    matched.sort(key=lambda item: (-item[0][0], -item[0][1], item[1].name))
+    return [skill for _, skill in matched[:limit]]
 
 
 # ------------------------------------------------------------- truncation

@@ -116,8 +116,17 @@ def check_semantics(source: str, contract: Contract) -> tuple[int, str]:
     events = re.findall(
         r"\b(?:always|always_ff)\s*@\s*(?:\(([^)]*)\)|(\w+))", source)
     problems = []
+    timing_inputs = {name for direction, _, name in contract.ports
+                     if direction == "input" and re.search(
+                         r"(?:^|_)(?:clk|clock|a?reset|rst|clear)(?:_?n|_|$)",
+                         name, re.I)}
     for parenthesized, bare in events:
         event = parenthesized or bare
+        if (not timing_inputs
+                and re.search(r"\b(?:posedge|negedge)\b", event)):
+            problems.append(
+                f"timed process @({event}) has no declared clock or reset input; "
+                "do not invent edge-triggered state")
         if contract.combinational_only and re.search(r"\b(?:posedge|negedge)\b", event):
             problems.append(
                 f"combinational-only scope contains clocked process @({event}). "

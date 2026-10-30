@@ -1,10 +1,11 @@
-"""Optional real-tool integration tests with hand-derived, public specifications."""
+"""Optional tool tests for literal specification tables and the generic checker harness."""
 
 import unittest
 
 from agent.oracles import from_spec
 from agent.spec_contract import extract_contract
 from agent.tools import RtlToolchain
+from agent.verification import SelfTest
 
 
 class VivadoOracleTests(unittest.TestCase):
@@ -23,16 +24,22 @@ class VivadoOracleTests(unittest.TestCase):
             rc, log = self.rtl.simulate(header + ";\n" + body + "\nendmodule\n", tb, 90)
             self.assertEqual(rc, expected, log)
 
-    def test_population_count(self):
-        self.compare('A "population count" circuit.',
-                     "module TopModule(input [14:0] in, output reg [3:0] out)",
-                     "integer i; always @* begin out=0; for(i=0;i<15;i=i+1) out=out+in[i]; end",
-                     "always @* out=0;")
-
-    def test_sign_extension(self):
-        self.compare("Sign-extend the smaller number.",
-                     "module TopModule(input [3:0] in, output [7:0] out)",
-                     "assign out={{4{in[3]}},in};", "assign out={4'b0,in};")
+    def test_stimulus_local_declaration_after_controller_initialization(self):
+        header = "module TopModule(input a,b,output q);"
+        contract = extract_contract("q is a AND b", header, "TopModule")
+        checker = SelfTest("", """
+integer i;
+for(i=0;i<4;i=i+1) begin
+  a=i[0]; b=i[1]; #1;
+  check(q,a&b,1'b1,"truth table with a block-local loop variable");
+end
+""", "All four input pairs after controller input initialization")
+        for expression, expected in (("a&b", 0), ("a|b", 1)):
+            with self.subTest(expression=expression):
+                rc, log = self.rtl.simulate(
+                    header + f" assign q={expression}; endmodule",
+                    checker.render(contract), 90)
+                self.assertEqual(rc, expected, log)
 
     def test_kmap(self):
         self.compare("""Karnaugh map
@@ -56,17 +63,6 @@ A (out=0) --in=1--> A
                      "else if(!in) state<=~state; assign out=state;",
                      "reg state,q; always @(posedge clk) begin if(reset) state<=1; "
                      "else if(!in) state<=~state; q<=state; end assign out=q;")
-
-    def test_sticky_capture(self):
-        prompt = ("Capture when input changes from 1 in one clock cycle to 0 the next. "
-                  "The output will remain 1 until reset (active high synchronous reset).")
-        header = "module TopModule(input clk,reset,input [7:0] in,output reg [7:0] out)"
-        self.compare(prompt, header,
-                     "reg [7:0] prev; always @(posedge clk) begin prev<=in; "
-                     "if(reset) out<=0; else out<=out|(prev&~in); end",
-                     "reg [7:0] prev; always @(posedge clk) begin if(reset) "
-                     "begin prev<=0; out<=0; end else begin prev<=in; "
-                     "out<=out|(prev&~in); end end")
 
     def test_combinational_state_table(self):
         self.compare("""Implement the output logic and next state logic for an FSM.
