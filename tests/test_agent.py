@@ -500,7 +500,10 @@ A (out=0) --in=1--> A
         test = from_spec(prompt, extract_contract(prompt, interface, "TopModule"))
         self.assertIn("synchronous reset off-edge holds", test.stimulus)
         self.assertIn("Moore pre-edge", test.stimulus)
-        self.assertIn("0: ref_state=in ? 0 : 1;", test.stimulus)
+        rows = {s["name"]: s for s in json.loads(test.derivation)["states"]}
+        self.assertEqual(rows["A"]["next"], {"0": "B", "1": "A"})
+        self.assertIn("1'b0: ref_state=1;", test.stimulus)
+        self.assertIn("1'b1: ref_state=0;", test.stimulus)
 
 
 class AgentLoopTests(unittest.TestCase):

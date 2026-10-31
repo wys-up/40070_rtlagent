@@ -55,18 +55,24 @@ def simulation_evidence(log: str, checker: str) -> tuple[str, int, int] | None:
     return checker, checks, failures
 
 
-def repair_feedback(log: str) -> str:
+def repair_feedback(log: str, sampled_vectors: bool = True) -> str:
     if "AGENT_MISMATCH" not in log:
         return log
     lines = log.splitlines()
     history = [line for line in lines if line.startswith("AGENT_INPUT ")]
     first = next(line for line in lines if "AGENT_MISMATCH" in line)
     summary = [line for line in lines if line.startswith("AGENT_SELFTEST_RESULT")]
-    return "\n".join([first] + summary + [
+    schedule = (
         "Controller input history: one row per driven vector; sequential rows "
         "each advance ONE sampling edge, not one edge per comparison phase. "
-        "Values are hexadecimal bit patterns. Repeated identical rows each "
-        "still consume a separate edge."] + history)
+        "Repeated identical rows each still consume a separate edge."
+        if sampled_vectors else
+        "Input history records comparisons, not sampling edges. Multiple "
+        "observations may share a clock cycle. Use clock values and the original "
+        "waveform timestamps to identify edges. Waveform data changes coincident "
+        "with a clock edge are published after that edge samples the prior value.")
+    return "\n".join([first] + summary + [schedule,
+                     "Values are hexadecimal bit patterns."] + history)
 
 
 class BudgetExpired(Exception):
@@ -174,7 +180,7 @@ def solve_agent(llm: LLM, trace: Trace, prompt: str, interface: str, top: str,
     seen: dict[str, str] = {}
     failures: dict[str, int] = {}
     selftest = from_spec(prompt, contract)
-    literal_code = literal_implementation(selftest, contract)
+    literal_code = literal_implementation(selftest, contract, prompt)
     checker_attempts = 1 if selftest else 0
     checker_error = ""
     checker_response = json.dumps(selftest.__dict__) if selftest else ""
@@ -640,7 +646,9 @@ def solve_agent(llm: LLM, trace: Trace, prompt: str, interface: str, top: str,
             break
         if selftest and selftest.uncertainties:
             sim_log += "\nSpecification/checker interpretation: " + selftest.uncertainties
-        last_log = failed(digest, _with_note(interface_note, repair_feedback(sim_log)))
+        last_log = failed(digest, _with_note(
+            interface_note, repair_feedback(sim_log, sampled_vectors=bool(
+                selftest and selftest.reference))))
 
     trace.write(tool="agent", event="return_best", rank=best_rank,
                 functional_verified=best_rank[-1] == 1)

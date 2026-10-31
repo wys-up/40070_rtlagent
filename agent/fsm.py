@@ -14,6 +14,117 @@ class UnsupportedGraph(ValueError):
     pass
 
 
+def clock_edge(prompt, clock):
+    clock_name = rf"(?:{re.escape(clock)}|clock)"
+    falling = r"(?:negative[- ]edge|falling[- ]edge|negedge)"
+    return "negedge" if re.search(
+        rf"\b{falling}\s+(?:of\s+(?:the\s+)?)?{clock_name}\b|"
+        rf"\b{clock_name}\s+(?:is\s+)?(?:sampled\s+on\s+)?(?:the\s+)?{falling}\b",
+        prompt, re.I) else "posedge"
+
+
+def literal_moore_graph(prompt, contract):
+    """Read a complete scalar-output diagram; never infer missing transitions."""
+    interface = graph_interface(prompt + "\nMoore", contract)
+    if not interface:
+        return None
+    _, _, inputs, outputs = interface
+    if len(outputs) != 1:
+        return None
+    arrow_lines = [line.strip() for line in prompt.splitlines() if "--" in line]
+    pattern = (r"(\w+)\s*\(\s*(\w+)\s*=\s*([01])\s*\)\s*"
+               r"--\s*(\w+)\s*=\s*([01])\s*-->\s*(\w+)")
+    edges = [re.fullmatch(pattern, line) for line in arrow_lines]
+    if not edges or not all(edges):
+        return None
+    reset_names = re.findall(
+        r"\breset\s+state\s+is\s+(\w+)|"
+        r"\breset\b[^.\n]*?\bto\s+state\s+(\w+)", prompt, re.I)
+    resets = {left or right for left, right in reset_names}
+    if len(resets) != 1:
+        return None
+    rows = {}
+    for edge in edges:
+        source, output, level, control, value, target = edge.groups()
+        if output != outputs[0] or control not in inputs:
+            return None
+        row = rows.setdefault(source, dict(outputs={output: int(level)},
+                                           control=control, next={}))
+        if (row["outputs"] != {output: int(level)} or row["control"] != control
+                or value in row["next"]):
+            return None
+        row["next"][value] = target
+    reset = resets.pop()
+    if (not 1 <= len(rows) <= 32 or reset not in rows
+            or any(set(row["next"]) != {"0", "1"}
+                   or any(target not in rows for target in row["next"].values())
+                   for row in rows.values())):
+        return None
+    states = []
+    for name, row in sorted(rows.items()):
+        index = inputs.index(row["control"])
+        states.append(dict(name=name, outputs=row["outputs"], next={
+            "".join(bits): row["next"][bits[index]]
+            for bits in itertools.product("01", repeat=len(inputs))}))
+    graph = dict(reset_state=reset, states=states)
+    try:
+        compile_graph(json.dumps(graph), prompt + "\nMoore", contract, contract.top)
+    except ValueError:
+        return None
+    return graph
+
+
+def literal_mealy_graph(prompt, contract):
+    if not re.search(r"\bMealy\b", prompt, re.I):
+        return None
+    interface = graph_interface(prompt, contract, mealy=True)
+    if not interface:
+        return None
+    _, _, inputs, outputs = interface
+    if len(outputs) != 1:
+        return None
+    lines = [line.strip() for line in prompt.splitlines() if "--" in line]
+    edges = [re.fullmatch(
+        r"(\w+)\s*--\s*(\w+)\s*=\s*([01])\s*"
+        r"\(\s*(\w+)\s*=\s*([01])\s*\)\s*-->\s*(\w+)", line)
+        for line in lines]
+    reset_names = re.findall(
+        r"\breset(?:s)?\s+(?:into|to)\s+state\s+(\w+)|"
+        r"\breset\s+state\s+is\s+(\w+)", prompt, re.I)
+    resets = {a or b for a, b in reset_names}
+    if not edges or not all(edges) or len(resets) != 1:
+        return None
+    rows = {}
+    for edge in edges:
+        source, control, condition, output, value, target = edge.groups()
+        if control not in inputs or output != outputs[0]:
+            return None
+        row = rows.setdefault(source, dict(control=control, next={}, outputs={}))
+        if control != row["control"] or condition in row["next"]:
+            return None
+        row["next"][condition] = target
+        row["outputs"][condition] = {output: int(value)}
+    reset = resets.pop()
+    if (not 1 <= len(rows) <= 32 or reset not in rows
+            or any(set(row["next"]) != {"0", "1"}
+                   or any(n not in rows for n in row["next"].values())
+                   for row in rows.values())):
+        return None
+    states = []
+    for name, row in sorted(rows.items()):
+        index = inputs.index(row["control"])
+        patterns = ["".join(bits) for bits in itertools.product("01", repeat=len(inputs))]
+        states.append(dict(name=name,
+                           next={p: row["next"][p[index]] for p in patterns},
+                           outputs={p: row["outputs"][p[index]] for p in patterns}))
+    graph = dict(kind="mealy", reset_state=reset, states=states)
+    try:
+        compile_graph(json.dumps(graph), prompt, contract, contract.top)
+    except ValueError:
+        return None
+    return graph
+
+
 def _registered_graph(graph, inputs, outputs):
     """Convert edge emissions to a reachable Moore product, without protocol rules."""
     if (set(graph) != {"reset_state", "reset_outputs", "states"}
@@ -81,8 +192,9 @@ def _registered_graph(graph, inputs, outputs):
     return dict(reset_state="G0", states=compiled)
 
 
-def graph_interface(prompt, contract):
-    if (contract.combinational_only or not contract.reset_kind
+def graph_interface(prompt, contract, *, mealy=False):
+    if (re.search(r"\bMealy\b", prompt, re.I) and not mealy
+            or contract.combinational_only or not contract.reset_kind
             or not contract.reset_polarity or not re.search(
                 r"\bFSM\b|finite.state machine|\bMoore\b", prompt, re.I)):
         return None
@@ -101,10 +213,6 @@ def graph_interface(prompt, contract):
 
 
 def compile_graph(text, prompt, contract, top):
-    interface = graph_interface(prompt, contract)
-    if not interface:
-        raise ValueError("task is outside the bounded scalar Moore graph subset")
-    clk, reset, inputs, outputs = interface
     text = strip_think(text).strip()
     blocks = re.findall(r"```(?:json)?\s*\n(.*?)```", text, re.S)
     if len(blocks) > 1:
@@ -118,13 +226,20 @@ def compile_graph(text, prompt, contract, top):
             return valid.pop()
         raise ValueError("response needs one unique structurally valid graph")
     graph = json.loads(blocks[0] if blocks else text)
+    mealy = isinstance(graph, dict) and graph.get("kind") == "mealy"
+    if mealy:
+        graph = {key: value for key, value in graph.items() if key != "kind"}
+    interface = graph_interface(prompt, contract, mealy=mealy)
+    if not interface:
+        raise ValueError("task is outside the bounded scalar graph subset")
+    clk, reset, inputs, outputs = interface
     if graph == {"unsupported": True}:
         raise UnsupportedGraph("specification requires behavior outside a scalar Moore graph")
     if isinstance(graph, dict) and "reasoning" in graph:
         if not isinstance(graph["reasoning"], str):
             raise ValueError("graph reasoning must be explanatory text")
         graph = {k: v for k, v in graph.items() if k != "reasoning"}
-    if isinstance(graph, dict) and "reset_outputs" in graph:
+    if isinstance(graph, dict) and "reset_outputs" in graph and not mealy:
         return compile_graph(json.dumps(_registered_graph(graph, inputs, outputs)),
                              prompt, contract, top)
     if (not isinstance(graph, dict) or set(graph) != {"reset_state", "states"}
@@ -139,6 +254,14 @@ def compile_graph(text, prompt, contract, top):
         raise ValueError("graph needs unique state names and a declared reset_state")
     patterns = {"".join(bits) for bits in itertools.product("01", repeat=len(inputs))}
     for state in states:
+        values = state.get("outputs") if isinstance(state, dict) else None
+        output_rows = list(values.values()) if mealy and isinstance(values, dict) else [values]
+        valid_outputs = (isinstance(values, dict)
+                         and (not mealy or set(values) == patterns)
+                         and all(isinstance(row, dict) and set(row) == set(outputs)
+                                 and all(type(v) is int and v in (0, 1)
+                                         for v in row.values())
+                                 for row in output_rows))
         if (isinstance(state, dict) and isinstance(state.get("next"), dict)
                 and set(state["next"]) != patterns):
             raise ValueError("next keys must be INPUT VALUES "
@@ -149,10 +272,8 @@ def compile_graph(text, prompt, contract, top):
                                {"name", "outputs", "next", "repeat"})
                 or type(state.get("repeat", 1)) is not int
                 or not 1 <= state.get("repeat", 1) <= 64
-                or not isinstance(state["outputs"], dict)
-                or set(state["outputs"]) != set(outputs)
-                or any(type(v) is not int or v not in (0, 1)
-                       for v in state["outputs"].values())
+                or not valid_outputs
+                or mealy and state.get("repeat", 1) != 1
                 or not isinstance(state["next"], dict)
                 or set(state["next"]) != patterns
                 or any(not isinstance(n, str) or n not in names
@@ -180,15 +301,12 @@ def compile_graph(text, prompt, contract, top):
         raise ValueError("expanded repeat graph exceeds 64 states")
     indices = {name: index for index, (name, _, _) in enumerate(expanded)}
     reset_index = indices[(graph["reset_state"], 0)]
-    width = max(1, (len(expanded)-1).bit_length())
+    onehot = bool(re.search(r"\bone[- ]hot\b", prompt, re.I))
+    width = len(expanded) if onehot else max(1, (len(expanded)-1).bit_length())
+    encoding = lambda index: (1 << index) if onehot else index
     declarations = [f"  {d}{' reg' if d == 'output' else ''} {n}"
                     for d, _, n in contract.ports]
-    clock_name = rf"(?:{re.escape(clk)}|clock)"
-    falling = rf"(?:negative[- ]edge|falling[- ]edge|negedge)"
-    edge = "negedge" if re.search(
-        rf"\b{falling}\s+(?:of\s+(?:the\s+)?)?{clock_name}\b|"
-        rf"\b{clock_name}\s+(?:is\s+)?(?:sampled\s+on\s+)?(?:the\s+)?{falling}\b",
-        prompt, re.I) else "posedge"
+    edge = clock_edge(prompt, clk)
     reset_condition = reset if contract.reset_polarity == "high" else "!" + reset
     events = edge + " " + clk
     if contract.reset_kind == "asynchronous":
@@ -196,18 +314,26 @@ def compile_graph(text, prompt, contract, top):
     code = [f"module {top}(\n" + ",\n".join(declarations) + ");",
             f"reg [{width-1}:0] state;",
             f"always @({events}) begin",
-            f"  if({reset_condition}) state <= {width}'d{reset_index};",
+            f"  if({reset_condition}) state <= {width}'d{encoding(reset_index)};",
             "  else case(state)"]
     for index, (_, _, targets) in enumerate(expanded):
-        code += [f"    {width}'d{index}: case({{{','.join(inputs)}}})"]
-        code += [f"      {len(inputs)}'b{pattern}: state <= {width}'d{indices[target]};"
+        code += [f"    {width}'d{encoding(index)}: case({{{','.join(inputs)}}})"]
+        code += [f"      {len(inputs)}'b{pattern}: state <= {width}'d{encoding(indices[target])};"
                  for pattern, target in sorted(targets.items())]
-        code += [f"      default: state <= {width}'d{index};", "    endcase"]
-    code += [f"    default: state <= {width}'d{reset_index};",
+        code += [f"      default: state <= {width}'d{encoding(index)};", "    endcase"]
+    code += [f"    default: state <= {width}'d{encoding(reset_index)};",
              "  endcase", "end", "always @* begin", "  case(state)"]
     for index, (_, values, _) in enumerate(expanded):
+        if mealy:
+            code.append(f"    {width}'d{encoding(index)}: case({{{','.join(inputs)}}})")
+            for pattern, row in sorted(values.items()):
+                assignments = " ".join(f"{n}=1'b{row[n]};" for n in outputs)
+                code.append(f"      {len(inputs)}'b{pattern}: begin {assignments} end")
+            code += ["      default: begin " + " ".join(f"{n}=1'b0;" for n in outputs)
+                     + " end", "    endcase"]
+            continue
         assignments = " ".join(f"{n}=1'b{values[n]};" for n in outputs)
-        code.append(f"    {width}'d{index}: begin {assignments} end")
+        code.append(f"    {width}'d{encoding(index)}: begin {assignments} end")
     code += ["    default: begin " + " ".join(f"{n}=1'b0;" for n in outputs) + " end",
              "  endcase", "end", "endmodule"]
     return "\n".join(code) + "\n"
@@ -245,7 +371,7 @@ Keep the derivation short and complete, within 400 tokens."""},
         timeout_s=min(60, timeout_s * 0.4), max_tokens=640)
     record_plan(plan, time.monotonic()-started)
     if plan.finish_reason == "length":
-        raise ValueError("FSM sampling derivation was truncated")
+        raise UnsupportedGraph("FSM sampling derivation was truncated; use general RTL")
     timeout_s -= time.monotonic()-started
     if timeout_s < 10:
         raise ValueError("insufficient budget to compile the derived state graph")
@@ -312,7 +438,7 @@ output representation cannot express the task, return {"unsupported":true}."""
                       max_tokens=min(max_tokens, max(256, int(timeout_s * 14))))
     record(result, time.monotonic()-started)
     if result.finish_reason == "length":
-        raise ValueError("transition graph was truncated")
+        raise UnsupportedGraph("transition graph was truncated; use general RTL")
     code = compile_graph(result.text, prompt, contract, top)
     return result, LLMResult("```verilog\n" + code + "```", result.tokens_in,
                             result.tokens_out, result.finish_reason)
