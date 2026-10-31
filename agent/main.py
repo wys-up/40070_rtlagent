@@ -15,14 +15,14 @@ import signal
 import sys
 import time
 
-from .llm import LLM, LLMError, LLMResult, extract_code
+from .llm import LLM, LLMError, extract_code
 from .skills import load_skills, select
 from .tools import RtlToolchain, check_interface, source_safety_warnings
 from .tools import stop_active_tools, repair_output_declarations
 from .spec_contract import extract_contract, check_semantics, repair_synchronous_events
 from .verification import CheckerReviewRejected, review_selftest
 from .reference import generate_reference as generate_selftest
-from .oracles import from_spec, literal_implementation
+from .oracles import from_spec
 from .fsm import graph_interface, generate_graph, UnsupportedGraph
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -180,7 +180,6 @@ def solve_agent(llm: LLM, trace: Trace, prompt: str, interface: str, top: str,
     seen: dict[str, str] = {}
     failures: dict[str, int] = {}
     selftest = from_spec(prompt, contract)
-    literal_code = literal_implementation(selftest, contract, prompt)
     checker_attempts = 1 if selftest else 0
     checker_error = ""
     checker_response = json.dumps(selftest.__dict__) if selftest else ""
@@ -362,13 +361,10 @@ def solve_agent(llm: LLM, trace: Trace, prompt: str, interface: str, top: str,
             GENERATION_S, max(0, left - min(VALIDATION_RESERVE_S, left * 0.35)))
         if generation_s <= 0:
             break
-        literal_round = rnd == 1 and literal_code is not None
-        trace.write(tool="spec_compile" if literal_round else "llm", round=rnd, event="start",
+        trace.write(tool="llm", round=rnd, event="start",
                     timeout_s=round(generation_s, 3))
         try:
-            if literal_round:
-                result = LLMResult("```verilog\n" + literal_code + "```")
-            elif graph_enabled and graph_interface(prompt, contract):
+            if graph_enabled and graph_interface(prompt, contract):
                 raw, result = generate_graph(llm, prompt, contract, top,
                                              generation_s, RTL_MAX_TOKENS, last_log,
                                              record_plan=record_plan,
@@ -400,16 +396,14 @@ def solve_agent(llm: LLM, trace: Trace, prompt: str, interface: str, top: str,
             continue
         model_failures = 0
         trace.write(
-            tool="spec_compile" if literal_round else
-                 ("graph_compile" if graph_recorded else "llm"), round=rnd,
+            tool="graph_compile" if graph_recorded else "llm", round=rnd,
             tokens_in=result.tokens_in, tokens_out=result.tokens_out,
             elapsed_s=round(time.monotonic() - t0
                             - (plan_elapsed_s - plan_elapsed_before)
                             - graph_elapsed_s, 2),
             finish_reason=result.finish_reason,
         )
-        rtl.record("specification-response.txt" if literal_round else "model-response.txt",
-                   result.text)
+        rtl.record("model-response.txt", result.text)
 
         code = extract_code(result.text)
         if not code:

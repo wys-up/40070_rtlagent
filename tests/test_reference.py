@@ -8,7 +8,7 @@ from agent.spec_contract import extract_contract
 from agent.tools import RtlToolchain, source_safety_warnings
 from agent.llm import LLMResult
 from agent.verification import review_selftest
-from agent.oracles import from_spec, literal_implementation
+from agent.oracles import from_spec
 
 
 class ReferenceTests(unittest.TestCase):
@@ -81,7 +81,7 @@ class ReferenceTests(unittest.TestCase):
                 code.replace(f"{name} < -{bound}", f"$signed({name}) < -{bound}"),
                 contract.ports))
 
-    def test_literal_compilation_changes_with_axes_cells_and_port_order(self):
+    def test_literal_observations_change_with_axes_cells_and_port_order(self):
         prompt = """Karnaugh map
      yz
 x 10 00 11 01
@@ -91,12 +91,11 @@ x 10 00 11 01
         contract = extract_contract("", "module Device(input z,x,y,output answer);", "Device")
         test = from_spec(prompt, contract)
         self.assertIsNotNone(test)
-        code = literal_implementation(test, contract)
-        self.assertIn("case({z,x,y})", code)
-        self.assertIn("3'b010: {answer}=1'b1;", code)
+        self.assertIn(dict(inputs=dict(y=0, z=0, x=1),
+                           outputs=dict(answer=1)), test.facts)
         changed = from_spec(prompt.replace("1 | 0 | 1 | x | 0 |",
                                            "1 | 1 | 0 | x | 1 |"), contract)
-        self.assertNotEqual(code, literal_implementation(changed, contract))
+        self.assertNotEqual(test.facts, changed.facts)
     def test_small_combinational_exhaustive_driver_uses_real_outputs(self):
         contract = extract_contract("", "module TopModule(input [2:0] a,output q);",
                                     "TopModule")

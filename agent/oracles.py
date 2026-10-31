@@ -63,47 +63,6 @@ def from_spec(prompt: str, contract: Contract) -> SelfTest | None:
             or _mealy_arrows(prompt, contract))
 
 
-def literal_implementation(test: SelfTest | None, contract: Contract,
-                           prompt: str = "") -> str | None:
-    """Compile complete literal observations, without minimizing or guessing."""
-    if test and test.derivation:
-        return compile_graph(test.derivation, prompt + "\nMoore", contract, contract.top)
-    if test is None or not test.facts:
-        return None
-    inputs = [(w, n) for d, w, n in contract.ports if d == "input"]
-    outputs = [(w, n) for d, w, n in contract.ports if d == "output"]
-    if (not inputs or not outputs or any(w <= 0 for w, _ in inputs + outputs)
-            or sum(w for w, _ in inputs) > 10):
-        return None
-    observations = {}
-    for fact in test.facts:
-        if (set(fact["inputs"]) != {n for _, n in inputs}
-                or set(fact["outputs"]) != {n for _, n in outputs}):
-            return None
-        if any(type(fact[k][n]) is not int or not 0 <= fact[k][n] < 1 << w
-               for k, ports in (("inputs", inputs), ("outputs", outputs))
-               for w, n in ports):
-            return None
-        key = "".join(format(fact["inputs"][n], f"0{w}b") for w, n in inputs)
-        value = "".join(format(fact["outputs"][n], f"0{w}b") for w, n in outputs)
-        if key in observations and observations[key] != value:
-            return None
-        observations[key] = value
-    declarations = [f"  {d}{' reg' if d == 'output' else ''} "
-                    + (f"[{w-1}:0] " if w > 1 else "") + n
-                    for d, w, n in contract.ports]
-    input_width = sum(w for w, _ in inputs)
-    output_width = sum(w for w, _ in outputs)
-    lhs = "{" + ",".join(n for _, n in outputs) + "}"
-    selector = "{" + ",".join(n for _, n in inputs) + "}"
-    rows = [f"    {input_width}'b{k}: {lhs}={output_width}'b{v};"
-            for k, v in sorted(observations.items())]
-    return (f"module {contract.top}(\n" + ",\n".join(declarations)
-            + ");\nalways @* begin\n  case(" + selector + ")\n"
-            + "\n".join(rows) + f"\n    default: {lhs}='0;\n"
-            "  endcase\nend\nendmodule\n")
-
-
 def _mealy_arrows(prompt, contract):
     graph = literal_mealy_graph(prompt, contract)
     if graph is None:
