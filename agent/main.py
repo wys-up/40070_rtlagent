@@ -15,15 +15,15 @@ import signal
 import sys
 import time
 
-from .llm import LLM, LLMError, extract_code
+from .llm import LLM, LLMError, LLMResult, extract_code
 from .skills import load_skills, select
-from .tools import (RtlToolchain, check_interface, source_safety_warnings,
-                    signed_arithmetic_warnings)
+from .tools import RtlToolchain, check_interface, source_safety_warnings
 from .tools import stop_active_tools, repair_output_declarations
 from .spec_contract import extract_contract, check_semantics, repair_synchronous_events
-from .verification import (CheckerReviewRejected, generate_selftest,
-                           review_selftest)
-from .oracles import from_spec
+from .verification import CheckerReviewRejected, review_selftest
+from .reference import generate_reference as generate_selftest
+from .oracles import from_spec, literal_implementation
+from .fsm import graph_interface, generate_graph, UnsupportedGraph
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -41,6 +41,32 @@ CHECKER_REVIEW_S = float(os.environ.get("AGENT_CHECKER_REVIEW_S", "45"))
 CHECKER_TOTAL_S = float(os.environ.get("AGENT_CHECKER_TOTAL_S", "240"))
 CHECKER_SIM_RESERVE_S = 30
 VALIDATION_RESERVE_S = float(os.environ.get("AGENT_VALIDATION_RESERVE_S", "180"))
+RTL_MAX_TOKENS = int(os.environ.get("AGENT_RTL_MAX_TOKENS", "3072"))
+
+
+def simulation_evidence(log: str, checker: str) -> tuple[str, int, int] | None:
+    """Only completed runs of the same frozen test are comparable."""
+    summary = re.search(r"AGENT_SELFTEST_RESULT checks=(\d+) failures=(\d+)", log)
+    if not summary:
+        return None
+    checks, failures = map(int, summary.groups())
+    if checks <= 0 or not 0 <= failures <= checks:
+        return None
+    return checker, checks, failures
+
+
+def repair_feedback(log: str) -> str:
+    if "AGENT_MISMATCH" not in log:
+        return log
+    lines = log.splitlines()
+    history = [line for line in lines if line.startswith("AGENT_INPUT ")]
+    first = next(line for line in lines if "AGENT_MISMATCH" in line)
+    summary = [line for line in lines if line.startswith("AGENT_SELFTEST_RESULT")]
+    return "\n".join([first] + summary + [
+        "Controller input history: one row per driven vector; sequential rows "
+        "each advance ONE sampling edge, not one edge per comparison phase. "
+        "Values are hexadecimal bit patterns. Repeated identical rows each "
+        "still consume a separate edge."] + history)
 
 
 class BudgetExpired(Exception):
@@ -142,11 +168,13 @@ def solve_agent(llm: LLM, trace: Trace, prompt: str, interface: str, top: str,
     rtl.record("contract.json", json.dumps(contract.to_dict(), ensure_ascii=False, indent=2))
     best = ""
     best_rank = (-1, -1, -1, -1, -1)
+    best_evidence = None
     current = ""
     last_log = ""
     seen: dict[str, str] = {}
     failures: dict[str, int] = {}
     selftest = from_spec(prompt, contract)
+    literal_code = literal_implementation(selftest, contract)
     checker_attempts = 1 if selftest else 0
     checker_error = ""
     checker_response = json.dumps(selftest.__dict__) if selftest else ""
@@ -158,16 +186,33 @@ def solve_agent(llm: LLM, trace: Trace, prompt: str, interface: str, top: str,
     restart_next = False
     duplicate_counts: dict[str, int] = {}
     task_skills = select(skills, prompt)
+    model_failures = 0
+    graph_enabled = True
+    previous_graph = ""
+    plan_count = 0
+    plan_elapsed_s = 0.0
+    graph_recorded = False
+    graph_elapsed_s = 0.0
 
     def remaining() -> float:
         return max(0.0, deadline_at - time.monotonic())
 
-    def retain(code: str, rank: tuple[int, ...], rnd: int) -> None:
-        nonlocal best, best_rank
-        if rank > best_rank:
+    def retain(code: str, rank: tuple[int, ...], rnd: int,
+               evidence: tuple[str, int, int] | None = None) -> None:
+        nonlocal best, best_rank, best_evidence
+        improved = (rank == best_rank and evidence is not None
+                    and best_evidence is not None
+                    and evidence[:2] == best_evidence[:2]
+                    and evidence[2] < best_evidence[2])
+        # Attach the first complete measurement to the already retained source.
+        if code == best and rank == best_rank and evidence is not None:
+            best_evidence = evidence
+        if rank > best_rank or improved:
             best, best_rank = code, rank
+            best_evidence = evidence
             save(code)
             trace.write(tool="candidate", event="retain", round=rnd, rank=rank,
+                        evidence=evidence, functional_improvement=improved,
                         sha256=hashlib.sha256(code.encode()).hexdigest())
 
     def failed(digest: str, log: str) -> str:
@@ -198,6 +243,24 @@ def solve_agent(llm: LLM, trace: Trace, prompt: str, interface: str, top: str,
                 "repeated invalid checker; derive a different compact "
                 "reference and stimulus from the original specification")
 
+    def record_plan(result, elapsed) -> None:
+        nonlocal plan_count, plan_elapsed_s
+        plan_count += 1
+        plan_elapsed_s += elapsed
+        rtl.record(f"specification-plan-{plan_count}.txt", result.text)
+        trace.write(tool="llm", purpose="spec_plan", round=rtl.round,
+                    tokens_in=result.tokens_in, tokens_out=result.tokens_out,
+                    elapsed_s=round(elapsed, 2), finish_reason=result.finish_reason)
+
+    def record_graph(result, elapsed) -> None:
+        nonlocal previous_graph, graph_recorded, graph_elapsed_s
+        previous_graph = result.text
+        graph_recorded, graph_elapsed_s = True, elapsed
+        rtl.record("transition-graph-response.txt", result.text)
+        trace.write(tool="llm", purpose="rtl", round=rtl.round,
+                    tokens_in=result.tokens_in, tokens_out=result.tokens_out,
+                    elapsed_s=round(elapsed, 2), finish_reason=result.finish_reason)
+
     def checker_fingerprint(response: str) -> str:
         try:
             canonical = json.dumps(json.loads(response), sort_keys=True)
@@ -210,6 +273,19 @@ def solve_agent(llm: LLM, trace: Trace, prompt: str, interface: str, top: str,
         rtl.record(f"selftest-review-{checker_attempts}{suffix}.txt", result.text)
         trace.write(tool="llm", purpose="selftest_review", attempt=checker_attempts,
                     review_attempt=review_attempt,
+                    tokens_in=result.tokens_in, tokens_out=result.tokens_out,
+                    elapsed_s=round(elapsed, 2), finish_reason=result.finish_reason)
+
+    def record_witness(rc, log, elapsed) -> None:
+        rtl.record(f"review-witness-{checker_attempts}-{review_attempt}.log", log)
+        trace.write(tool="review_witness", attempt=checker_attempts,
+                    review_attempt=review_attempt, rc=rc,
+                    elapsed_s=round(elapsed, 3), excerpt=log[:2000])
+
+    def record_expectation(result, elapsed) -> None:
+        rtl.record(f"witness-expectation-{checker_attempts}-{review_attempt}.txt", result.text)
+        trace.write(tool="llm", purpose="witness_expectation",
+                    attempt=checker_attempts, review_attempt=review_attempt,
                     tokens_in=result.tokens_in, tokens_out=result.tokens_out,
                     elapsed_s=round(elapsed, 2), finish_reason=result.finish_reason)
 
@@ -249,6 +325,12 @@ def solve_agent(llm: LLM, trace: Trace, prompt: str, interface: str, top: str,
                         selected=[s.name for s in chosen])
 
         user = build_task_block(prompt, interface)
+        if selftest and selftest.facts:
+            user += ("\n\nLiteral input/output observations expanded from the "
+                     "labels in the ORIGINAL specification (don't-care cells "
+                     "omitted). Preserve these observations exactly; use a "
+                     "direct complete case table if simplification is uncertain:\n"
+                     + json.dumps(selftest.facts, separators=(",", ":")))
         if last_log:
             if restart_next:
                 trace.write(tool="agent", event="restart_from_spec", round=rnd)
@@ -267,29 +349,61 @@ def solve_agent(llm: LLM, trace: Trace, prompt: str, interface: str, top: str,
         messages.append({"role": "user", "content": user})
 
         t0 = time.monotonic()
+        plan_elapsed_before = plan_elapsed_s
+        graph_recorded, graph_elapsed_s = False, 0.0
         left = remaining()
         generation_s = min(
             GENERATION_S, max(0, left - min(VALIDATION_RESERVE_S, left * 0.35)))
         if generation_s <= 0:
             break
-        trace.write(tool="llm", round=rnd, event="start",
+        literal_round = rnd == 1 and literal_code is not None
+        trace.write(tool="spec_compile" if literal_round else "llm", round=rnd, event="start",
                     timeout_s=round(generation_s, 3))
         try:
-            result = llm.chat(messages, timeout_s=generation_s)
-        except LLMError as exc:
-            trace.write(tool="llm", round=rnd, event="error", rc=1,
-                        elapsed_s=round(time.monotonic() - t0, 2),
+            if literal_round:
+                result = LLMResult("```verilog\n" + literal_code + "```")
+            elif graph_enabled and graph_interface(prompt, contract):
+                raw, result = generate_graph(llm, prompt, contract, top,
+                                             generation_s, RTL_MAX_TOKENS, last_log,
+                                             record_plan=record_plan,
+                                             previous_graph=previous_graph,
+                                             record=record_graph)
+                previous_graph = raw.text
+                rtl.record("transition-graph.json", raw.text)
+            else:
+                result = llm.chat(messages, timeout_s=generation_s,
+                                  max_tokens=min(RTL_MAX_TOKENS,
+                                                 max(256, int(generation_s * 14))))
+        except (LLMError, ValueError) as exc:
+            trace.write(tool="graph_validation" if graph_recorded else "llm",
+                        round=rnd, event="error", rc=1,
+                        elapsed_s=round(time.monotonic() - t0
+                                        - (plan_elapsed_s - plan_elapsed_before)
+                                        - graph_elapsed_s, 2),
                         excerpt=str(exc)[:500])
-            if best:
+            model_failures = model_failures + 1 if isinstance(exc, LLMError) else 0
+            if isinstance(exc, UnsupportedGraph):
+                graph_enabled = False
+            if model_failures >= 2:
                 break
+            current = current or best
+            last_log = (last_log + "\nGeneration diagnostic: " + str(exc)[:1000]
+                        + "\nThe preceding generation request failed. "
+                        "Return a compact COMPLETE implementation without prose; "
+                        "use loops rather than unrolling.").strip()
             continue
+        model_failures = 0
         trace.write(
-            tool="llm", round=rnd,
+            tool="spec_compile" if literal_round else
+                 ("graph_compile" if graph_recorded else "llm"), round=rnd,
             tokens_in=result.tokens_in, tokens_out=result.tokens_out,
-            elapsed_s=round(time.monotonic() - t0, 2),
+            elapsed_s=round(time.monotonic() - t0
+                            - (plan_elapsed_s - plan_elapsed_before)
+                            - graph_elapsed_s, 2),
             finish_reason=result.finish_reason,
         )
-        rtl.record("model-response.txt", result.text)
+        rtl.record("specification-response.txt" if literal_round else "model-response.txt",
+                   result.text)
 
         code = extract_code(result.text)
         if not code:
@@ -333,10 +447,6 @@ def solve_agent(llm: LLM, trace: Trace, prompt: str, interface: str, top: str,
             last_log = failed(digest, semantic_log)
             continue
         safety = source_safety_warnings(code, contract.ports)
-        if re.search(r"\bsigned\s+8-bit\s+saturating\s+accumulator\b",
-                     prompt, re.I):
-            safety.extend(signed_arithmetic_warnings(code))
-            safety = list(dict.fromkeys(safety))
         trace.write(tool="check_source_safety", round=rnd,
                     rc=1 if safety else 0, warnings=safety)
         if safety:
@@ -415,6 +525,7 @@ def solve_agent(llm: LLM, trace: Trace, prompt: str, interface: str, top: str,
                     break
                 checker_attempts += 1
                 request_started = time.monotonic()
+                checker_plan_before = plan_elapsed_s
                 previous_response, checker_response = checker_response, ""
                 try:
                     trace.write(tool="llm", purpose="selftest", event="start",
@@ -425,12 +536,13 @@ def solve_agent(llm: LLM, trace: Trace, prompt: str, interface: str, top: str,
                         timeout_s=request_budget,
                         previous_error=checker_error,
                         previous_response=previous_response,
-                        record=record_checker)
+                        record=record_checker, record_plan=record_plan)
                 except (LLMError, ValueError) as exc:
                     if isinstance(exc, LLMError):
                         trace.write(tool="llm", purpose="selftest", event="error",
                                     attempt=checker_attempts, rc=1,
-                                    elapsed_s=round(time.monotonic() - request_started, 2),
+                                    elapsed_s=round(time.monotonic() - request_started
+                                                    - (plan_elapsed_s - checker_plan_before), 2),
                                     excerpt=str(exc)[:500])
                     if checker_response:
                         invalid_checkers.add(checker_fingerprint(checker_response))
@@ -445,7 +557,7 @@ def solve_agent(llm: LLM, trace: Trace, prompt: str, interface: str, top: str,
                 checker_sha256 = hashlib.sha256(frozen_checker.encode()).hexdigest()
                 approved = False
                 review_error = ""
-                for review_attempt in range(1, 3):
+                for review_attempt in range(1, 4):
                     review_budget = min(
                         remaining(), CHECKER_REVIEW_S,
                         checker_deadline - time.monotonic() - CHECKER_SIM_RESERVE_S)
@@ -461,7 +573,8 @@ def solve_agent(llm: LLM, trace: Trace, prompt: str, interface: str, top: str,
                         reviewed = review_selftest(
                             llm, prompt, interface, contract, selftest,
                             timeout_s=review_budget, record=record_review,
-                            previous_error=review_error)
+                            previous_error=review_error, record_witness=record_witness,
+                            record_expectation=record_expectation)
                         if json.dumps(reviewed.__dict__, sort_keys=True) != frozen_checker:
                             raise CheckerReviewRejected(
                                 "checker review changed the frozen payload")
@@ -515,6 +628,11 @@ def solve_agent(llm: LLM, trace: Trace, prompt: str, interface: str, top: str,
                         verification="spec_selftest_and_synthesis",
                         limitation="generated checker does not prove official-test correctness")
             return best
+        if sim_rc == 1 and selftest:
+            frozen = json.dumps(selftest.__dict__, sort_keys=True)
+            evidence = simulation_evidence(
+                sim_log, hashlib.sha256(frozen.encode()).hexdigest())
+            retain(code, (1, 1, 1, 1, 0), rnd, evidence)
         if sim_rc != 1:
             trace.write(tool="agent", event="stop", round=rnd,
                         reason="no valid independent functional verdict",
@@ -522,7 +640,7 @@ def solve_agent(llm: LLM, trace: Trace, prompt: str, interface: str, top: str,
             break
         if selftest and selftest.uncertainties:
             sim_log += "\nSpecification/checker interpretation: " + selftest.uncertainties
-        last_log = failed(digest, _with_note(interface_note, sim_log))
+        last_log = failed(digest, _with_note(interface_note, repair_feedback(sim_log)))
 
     trace.write(tool="agent", event="return_best", rank=best_rank,
                 functional_verified=best_rank[-1] == 1)

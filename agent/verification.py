@@ -6,13 +6,15 @@ self-test is useful evidence, never a substitute for an independent official TB.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 import re
 import time
+from pathlib import Path
 
 from .llm import LLM, strip_think
 from .spec_contract import Contract
+from .skills import load_skills, select
 
 SELFTEST_MAX_TOKENS = 2048
 REVIEW_MAX_TOKENS = 512
@@ -29,6 +31,9 @@ class SelfTest:
     stimulus: str
     coverage: str
     uncertainties: str = ""
+    reference: str = ""
+    facts: list[dict] = field(default_factory=list)
+    derivation: str = ""
 
     def render(self, contract: Contract) -> str:
         width = max([1024] + [w for _, w, _ in contract.ports])
@@ -44,12 +49,35 @@ class SelfTest:
             if direction == "input":
                 init.append(f"    {name} = '0;")
         connections = ", ".join(f".{n}({n})" for _, _, n in contract.ports)
+        reference_instance = ""
+        if self.reference:
+            ref_connections = ", ".join(
+                f".{n}({'ref_' + n if d == 'output' else n})"
+                for d, _, n in contract.ports)
+            for d, bits, n in contract.ports:
+                if d == "output":
+                    rng = "" if bits == 1 else f"[{bits-1}:0] "
+                    ports.append(f"  wire {rng}ref_{n};")
+            reference_instance = f"  SpecReference reference_model ({ref_connections});"
+        inputs = [n for d, _, n in contract.ports if d == "input"]
+        snapshot = ('$sformatf("' + " ".join(n + "=%h" for n in inputs)
+                    + '", ' + ", ".join(inputs) + ')') if inputs else '""'
         return f"""`timescale 1ns/1ps
 module agent_tb;
 {chr(10).join(ports)}
   {contract.top} dut ({connections});
+{reference_instance}
   integer agent_checks = 0;
   integer agent_failures = 0;
+  string agent_history [0:63];
+  integer agent_samples = 0;
+  integer agent_history_index;
+  task agent_record_sample;
+    begin
+      agent_history[agent_samples % 64] = {snapshot};
+      agent_samples = agent_samples + 1;
+    end
+  endtask
   task check;
     input [{width - 1}:0] actual, expected, mask;
     input string label;
@@ -63,11 +91,18 @@ module agent_tb;
         $fatal(1, "empty comparison");
       end
       agent_checks = agent_checks + 1;
+      {"" if self.reference else "agent_record_sample();"}
       if ((actual & mask) !== (expected & mask)) begin
         agent_failures = agent_failures + 1;
-        $display("AGENT_MISMATCH t=%0t case=%s actual=%0h expected=%0h mask=%0h",
-                 $time, label, actual, expected, mask);
-        if (agent_failures >= 8) $fatal(1, "too many mismatches");
+        if (agent_failures == 1)
+          for (agent_history_index = (agent_samples > 64 ? agent_samples-64 : 0);
+               agent_history_index < agent_samples;
+               agent_history_index = agent_history_index + 1)
+            $display("AGENT_INPUT sample=%0d %s", agent_history_index,
+                     agent_history[agent_history_index % 64]);
+        if (agent_failures <= 8)
+          $display("AGENT_MISMATCH t=%0t case=%s actual=%0h expected=%0h mask=%0h",
+                   $time, label, actual, expected, mask);
       end
     end
   endtask
@@ -81,6 +116,7 @@ module agent_tb;
       $display("AGENT_CHECKER_ERROR no comparisons executed");
       $fatal(1, "empty self-test");
     end
+    $display("AGENT_SELFTEST_RESULT checks=%0d failures=%0d", agent_checks, agent_failures);
     if (agent_failures != 0) $fatal(1, "functional mismatches");
     $display("AGENT_SELFTEST_PASS checks=%0d", agent_checks);
     $finish;
@@ -91,6 +127,7 @@ module agent_tb;
     $fatal(1, "self-test timeout");
   end
 endmodule
+{self.reference}
 """
 
 
@@ -336,13 +373,46 @@ also test the off-edge effect explicitly.
 def review_selftest(llm: LLM, prompt: str, interface: str, contract: Contract,
                     test: SelfTest, timeout_s: float,
                     record=lambda result, elapsed: None,
-                    previous_error: str = "") -> SelfTest:
+                    previous_error: str = "", record_witness=lambda *_: None,
+                    record_expectation=lambda *_: None) -> SelfTest:
     """Approve a frozen specification-only oracle or return reasons to rebuild it.
 
     Reviewing must not rewrite the payload: full rewrites can silently remove
     checks and consume the budget meant for RTL repair. A rejection still goes
     through the existing independent generator/review loop, never simulation.
     """
+    reference_note = ""
+    if test.reference:
+        reference_note = """
+This checker uses a standalone SpecReference module and a controller-generated
+driver. The reference implements ONLY externally observable specified behavior.
+Audit the reference for actual functional mistakes, not for having module,
+always, or initial constructs: those are allowed INSIDE SpecReference.
+ref_* wires are its outputs, NOT candidate internals. The fixed driver handles
+clocks, resets, randomized vectors, settling and comparisons. Data outputs absent
+from the original interface cannot be demanded. Judge only relevant coverage.
+A rejection must identify a precise specification requirement and a concrete
+counterexample or incorrect reference statement; do not reject over labels,
+formatting, variable names, or unobservable internal data.
+For THIS reference-model checker, issues must be objects, not strings:
+{"requirement":"exact short quote from ORIGINAL specification",
+ "location":"exact reference code fragment, or driver",
+ "counterexample":{"inputs":[{"input_name":0},{"input_name":1}],
+                   "output":"real_output_name","expected":1}}.
+Give at most ONE actual behavioral issue. Keep requirement/location under 200
+characters. Inputs are nonnegative integer bit patterns for existing input ports.
+The controller first resets the reference (when specified), then each inputs
+object changes inputs and advances one sampling edge (or settles combinationally).
+For repeated samples, prefer {"values":{"input_name":0},"repeat":N}; the controller
+expands exactly N edges. Total expanded sequence is bounded to 64 edges.
+Omitted inputs hold their values. Do not supply the clock. expected is the output
+AFTER the LAST step, not an internal state or a claim about received hidden data.
+The controller will EXECUTE this sequence to verify that your alleged defect
+exists. If the reference already produces expected, your rejection is false.
+A requirement
+quote must occur in the original specification. Unsupported demands are invalid.
+If approved, retain {"approved":true,"issues":[]}.
+"""
     messages = [
         {"role": "system", "content": """Independently audit a proposed SystemVerilog
 checker against the ORIGINAL specification. No DUT implementation is provided.
@@ -367,12 +437,50 @@ machinery or input/output redeclarations are allowed in the proposed fields.
 If correct: {"approved":true,"issues":[]}.
 Otherwise return approved=false with up to four concise, actionable issues,
 each at most 500 characters.
-An uncertain oracle must be rejected. Never adapt expectations to a DUT."""},
+An uncertain oracle must be rejected. Never adapt expectations to a DUT."""
+         + reference_note},
         {"role": "user", "content": "Specification:\n" + prompt
          + "\nInterface:\n" + interface
          + "\nParsed contract:\n" + json.dumps(contract.to_dict(), ensure_ascii=False)
          + "\nProposed checker:\n" + json.dumps(test.__dict__, ensure_ascii=False)},
     ]
+    if test.reference:
+        messages[0]["content"] = """Independently audit a specification reference
+against the ORIGINAL task, without seeing any candidate implementation.
+Return ONLY JSON with exactly approved (boolean) and issues (array).
+Approve only when the observable behavior and useful executed coverage match
+the specification. Check reference next-state logic, data widths/signedness,
+reset scope/polarity, initialization, output cycles, priorities and boundaries.
+Do not invent additional interface outputs, protocol requirements, latency,
+reset effects or restrictions absent from the task. Unknown initial values
+and specified don't-care bits are masked by the controller; an entirely
+unknown output cannot pass. Never adapt expectations to candidate behavior.
+If correct return {"approved":true,"issues":[]}. Otherwise approved=false
+requires a concrete, evidenced issue. Do not rewrite the frozen checker.
+""" + reference_note
+        if test.derivation:
+            messages[0]["content"] += """
+The supplied transition graph was mechanically compiled into SpecReference.
+Audit its behavioral semantics directly: transition outputs are registered
+AFTER the sampled input. repeat.count consumes that many additional edges after
+entry; intermediate outputs use repeat.outputs, last edge uses next.outputs.
+The compiler handles clock/reset and preserves outputs through the cycle.
+Check success AND invalid-event recovery, and the first sample after either.
+Histories requiring different future outputs cannot be merged just because
+their current outputs agree. Use compressed repeated samples in counterexamples.
+"""
+            payload = dict(test.__dict__)
+            payload["reference"] = "(mechanical compilation of derivation below)"
+            messages[1]["content"] = ("Specification:\n" + prompt
+                + "\nInterface:\n" + interface
+                + "\nParsed contract:\n" + json.dumps(contract.to_dict())
+                + "\nProposed checker:\n" + json.dumps(payload))
+    skills = select(load_skills(str(Path(__file__).resolve().parents[1] / "skill")), prompt)
+    if skills:
+        messages[0]["content"] += (
+            "\nRelevant behavioral reasoning rules, subordinate to the ORIGINAL "
+            "requirements. Keep the required review JSON format:\n"
+            + "\n".join(skill.render() for skill in skills[:2]))
     if previous_error:
         messages.append({"role": "user", "content":
                          "The previous review request failed; the checker is unchanged. "
@@ -390,12 +498,68 @@ An uncertain oracle must be rejected. Never adapt expectations to a DUT."""},
     if (not isinstance(verdict, dict) or set(verdict) != {"approved", "issues"}
             or type(verdict["approved"]) is not bool
             or not isinstance(verdict["issues"], list)
-            or len(verdict["issues"]) > 4
-            or any(not isinstance(issue, str) or not issue.strip() or len(issue) > 500
-                   for issue in verdict["issues"])):
+            or len(verdict["issues"]) > (1 if test.reference else 4)):
         raise ValueError("checker review must return approved boolean and up to four "
                          "nonempty issues of at most 500 characters")
     issues = verdict["issues"]
+    if test.reference:
+        normalized_spec = re.sub(r"\s+", " ", prompt).lower()
+        for issue in issues:
+            if (not isinstance(issue, dict)
+                    or set(issue) != {"requirement", "location", "counterexample"}
+                    or any(not isinstance(issue[k], str) or not issue[k].strip()
+                           or len(issue[k]) > 512 for k in ("requirement", "location"))):
+                raise ValueError("reference review needs quoted requirement, "
+                                 "location and concrete counterexample")
+            quote = re.sub(r"\s+", " ", issue["requirement"]).lower()
+            if len(quote) < 8 or quote not in normalized_spec:
+                raise ValueError("review requirement is not quoted from the specification")
+            # Location is explanatory; replayed behavior, rather than an exact
+            # text match on whitespace or prose labels, decides this allegation.
+            from .reference import validate_review_witness
+            replay_budget = timeout_s - (time.monotonic() - started)
+            if replay_budget < 10:
+                raise ValueError("review needs budget to replay the proposed counterexample")
+            witness = issue["counterexample"]
+            if (not isinstance(witness, dict)
+                    or set(witness) != {"inputs", "output", "expected"}):
+                raise ValueError("counterexample needs inputs, output and expected")
+            validate_review_witness(test, contract, witness, replay_budget-5,
+                                    record=record_witness)
+            replay_budget = timeout_s - (time.monotonic() - started)
+            if replay_budget < 5:
+                raise ValueError("insufficient budget to verify witness expectation")
+            expectation_started = time.monotonic()
+            expectation = llm.chat([
+                {"role": "system", "content": """Derive one observable output from
+the ORIGINAL specification and a concrete input sequence. No implementation or
+other proposed answer is supplied. Begin with specified reset, then each input
+object advances ONE sampling edge; omitted inputs hold. {"values":{...},"repeat":N}
+means exactly N repeated edges. Return ONLY {"expected":INTEGER,"reason":"short
+edge-count and requirement derivation"}. Expected is a NONNEGATIVE output bit
+pattern AFTER the final sample, not an internal state. Account for invalid
+events and recovery; a delayed recovery does not imply successful completion.
+Do not invent requirements. If the output cannot be determined return
+{"uncertain":true}. Keep the response under 180 tokens."""},
+                {"role": "user", "content": "Specification:\n" + prompt
+                 + "\nInterface:\n" + interface + "\nSequence:\n"
+                 + json.dumps(dict(inputs=witness["inputs"], output=witness["output"]))}],
+                timeout_s=min(20, replay_budget), max_tokens=256)
+            record_expectation(expectation, time.monotonic()-expectation_started)
+            try:
+                derived = json.loads(strip_think(expectation.text).strip())
+            except (ValueError, TypeError):
+                raise ValueError("independent witness expectation was malformed")
+            if (expectation.finish_reason == "length" or not isinstance(derived, dict)
+                    or type(derived.get("expected")) is not int
+                    or derived["expected"] != witness["expected"]):
+                raise ValueError("review witness expectation is not supported by "
+                                 "an independent specification-only derivation: "
+                                 + expectation.text[:800])
+        issues = [json.dumps(issue) for issue in issues]
+    elif any(not isinstance(issue, str) or not issue.strip() or len(issue) > 500
+             for issue in issues):
+        raise ValueError("checker review issues must be nonempty short strings")
     if verdict["approved"] and not issues:
         return test
     if not verdict["approved"] and issues:

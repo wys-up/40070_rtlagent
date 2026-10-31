@@ -9,6 +9,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from agent import main, tools
+from agent import reference as reference_tools
 from agent.llm import LLM, LLMError, LLMResult, extract_code
 from agent.skills import load_skills, select
 from agent.spec_contract import extract_contract, check_semantics, repair_synchronous_events
@@ -19,6 +20,7 @@ from agent.oracles import from_spec
 INTERFACE = "module TopModule(input a, input b, output q);"
 BAD = INTERFACE + "\nassign q = a;\nendmodule\n"
 GOOD = INTERFACE + "\nassign q = a & b;\nendmodule\n"
+REFERENCE = "```verilog\n" + GOOD.replace("TopModule", "SpecReference") + "```"
 TEST = SelfTest("", """
     a=1; b=0; #1; check(q, 1'b0, 1'b1, "10");
     a=1; b=1; #1; check(q, 1'b1, 1'b1, "11");
@@ -167,9 +169,12 @@ class InterfaceAndContractTests(unittest.TestCase):
         root = Path(main.ROOT)
         system = (root / "agent/prompts/system.md").read_text(encoding="utf-8")
         repair = (root / "agent/prompts/repair.md").read_text(encoding="utf-8")
-        for phrase in ("Moore", "LFSR", "分支预测器", "并发查询",
-                       "每个 data bit", "错误 stop"):
+        for phrase in ("Moore", "sampling edge", "overlapping events",
+                       "independent updates", "error recovery"):
             self.assertIn(phrase, system)
+        selected = select(load_skills(main.SKILL_DIR),
+                          "serial receiver with a start bit and stop bit")
+        self.assertTrue(any("back-to-back frames" in s.render() for s in selected))
         self.assertIn("保持原有状态转移条件", repair)
         self.assertIn("行为等价", repair)
         self.assertIn("每个寄存器分别", repair)
@@ -447,6 +452,8 @@ cd  01 00 10 11
         interface = "module TopModule(input a,b,c,d, output out);"
         test = from_spec(prompt, extract_contract(prompt, interface, "TopModule"))
         self.assertEqual(test.stimulus.count("check("), 15)
+        self.assertEqual(test.facts[0],
+                         dict(inputs=dict(a=0, b=1, c=0, d=0), outputs=dict(out=1)))
         self.assertIn('a=1\'b0; b=1\'b1; c=1\'b0; d=1\'b0; #1; check(out, 1\'d1',
                       test.stimulus)
 
@@ -536,9 +543,9 @@ class AgentLoopTests(unittest.TestCase):
         for phase in ("selftest", "selftest_review"):
             with self.subTest(phase=phase):
                 llm = Mock(backend="openai")
-                tail = [LLMResult(json.dumps(TEST.__dict__)),
+                tail = [LLMResult(REFERENCE),
                         LLMResult('{"approved":true,"issues":[]}')]
-                first = [LLMResult(json.dumps(TEST.__dict__))]
+                first = [LLMResult(REFERENCE)]
                 if phase == "selftest_review":
                     tail = tail[1:]
                 llm.chat.side_effect = (
@@ -605,7 +612,7 @@ class AgentLoopTests(unittest.TestCase):
         llm = Mock(backend="openai")
         llm.chat.side_effect = [
             LLMResult("```verilog\n" + GOOD + "```"),
-            LLMResult(json.dumps(TEST.__dict__)),
+            LLMResult(REFERENCE),
             LLMResult("not approval JSON"),
             LLMResult('{"approved":true,"issues":[]}')]
         rtl = Mock(available=True, simulation_available=True, reason="")
@@ -634,6 +641,24 @@ class AgentLoopTests(unittest.TestCase):
         self.assertIn("AGENT_MISMATCH", str(llm.chat.call_args_list[1]))
         self.assertEqual(rtl.simulate.call_count, 2)
         self.assertTrue(any(e.get("event") == "accept" for e in events))
+
+    def test_same_frozen_test_retains_completed_improvement(self):
+        improved = GOOD.replace("a & b", "a | b")
+        answer, saved, events, _, _ = self.run_agent(
+            [BAD, improved],
+            [(1, "AGENT_MISMATCH first\nAGENT_SELFTEST_RESULT checks=14 failures=8"),
+             (1, "AGENT_MISMATCH next\nAGENT_SELFTEST_RESULT checks=14 failures=6")])
+        self.assertEqual(answer, improved)
+        self.assertEqual(saved[-1], improved)
+        self.assertTrue(any(e.get("functional_improvement") for e in events))
+
+    def test_partial_test_does_not_replace_measured_candidate(self):
+        other = GOOD.replace("a & b", "a | b")
+        answer, _, _, _, _ = self.run_agent(
+            [BAD, other],
+            [(1, "AGENT_MISMATCH first\nAGENT_SELFTEST_RESULT checks=14 failures=8"),
+             (1, "AGENT_MISMATCH next\nwatchdog expired")])
+        self.assertEqual(answer, BAD)
 
     def test_bad_latest_candidate_does_not_overwrite_compiled_candidate(self):
         broken = "module Wrong(input a); endmodule\n"
@@ -691,15 +716,15 @@ class AgentLoopTests(unittest.TestCase):
         rtl.simulate.assert_not_called()
 
     def test_review_rejection_rebuilds_independently_before_simulation(self):
-        rebuilt = SelfTest("", TEST.stimulus +
-                           '\na=0; b=1; #1; check(q,0,1,"added mixed input");',
-                           "Includes a=0 and b=1")
         llm = Mock(backend="openai")
         llm.chat.side_effect = [
             LLMResult("```verilog\n" + GOOD + "```"),
-            LLMResult(json.dumps(TEST.__dict__)),
-            LLMResult('{"approved":false,"issues":["Cover a=0,b=1"]}'),
-            LLMResult(json.dumps(rebuilt.__dict__)),
+            LLMResult(REFERENCE),
+            LLMResult(json.dumps(dict(approved=False, issues=[dict(
+                requirement="q is a AND b", location="driver",
+                counterexample=dict(inputs=[dict(a=0, b=1)], output="q", expected=1))]))),
+            LLMResult('{"expected":1,"reason":"independent expectation"}'),
+            LLMResult(REFERENCE.replace("a & b", "b & a")),
             LLMResult('{"approved":true,"issues":[]}'),
         ]
         rtl = Mock(available=True, simulation_available=True, reason="")
@@ -710,6 +735,7 @@ class AgentLoopTests(unittest.TestCase):
             trace = main.Trace(os.path.join(tmp, "trace.jsonl"))
             try:
                 with patch.object(main, "RtlToolchain", return_value=rtl), \
+                        patch.object(reference_tools, "validate_review_witness"), \
                         patch.object(main, "MAX_ROUNDS", 1):
                     self.assertEqual(main.solve_agent(
                         llm, trace, "q is a AND b", INTERFACE, "TopModule"), GOOD)
@@ -717,13 +743,13 @@ class AgentLoopTests(unittest.TestCase):
                 trace.close()
             events = [json.loads(s) for s in Path(trace.path).read_text(
                 encoding="utf-8").splitlines()]
-        self.assertEqual(llm.chat.call_count, 5)
+        self.assertEqual(llm.chat.call_count, 6)
         rtl.simulate.assert_called_once()
-        self.assertIn("added mixed input", rtl.simulate.call_args.args[1])
-        rebuild_request = llm.chat.call_args_list[3].args[0]
-        self.assertIn("Cover a=0,b=1", str(rebuild_request))
+        self.assertIn("assign q = b & a", rtl.simulate.call_args.args[1])
+        rebuild_request = llm.chat.call_args_list[4].args[0]
+        self.assertIn('"inputs": [{"a": 0, "b": 1}]', str(rebuild_request))
         for call in llm.chat.call_args_list[1:]:
-            self.assertNotIn("assign q", str(call.args[0]))
+            self.assertNotIn(GOOD, str(call.args[0]))
         starts = [e for e in events if e.get("purpose") == "selftest_review"
                   and e.get("event") == "start"]
         approvals = [e for e in events if e.get("event") == "review_approved"]

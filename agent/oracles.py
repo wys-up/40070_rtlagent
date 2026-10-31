@@ -21,30 +21,41 @@ def from_spec(prompt: str, contract: Contract) -> SelfTest | None:
     outputs = [(w, n) for d, w, n in ports if d == "output"]
     if not ports or any(w <= 0 for _, w, _ in ports):
         return None
-    # Four-variable maps retain the actual column order, including non-Gray maps.
+    # Literal axes retain their printed order; no Gray-order inference.
     header = re.search(
-        r"(?m)^\s*([A-Za-z]{2})\s*\n\s*([A-Za-z]{2})\s+"
-        r"([01]{2}(?:\s+[01]{2}){3})\s*$", prompt)
-    rows = re.findall(r"(?m)^\s*([01]{2})\s*\|\s*([01xXdD-])\s*"
-                      r"\|\s*([01xXdD-])\s*\|\s*([01xXdD-])\s*"
-                      r"\|\s*([01xXdD-])\s*\|?\s*$", prompt)
-    if header and len(rows) == 4 and len(outputs) == 1 and outputs[0][0] == 1:
+        r"(?m)^\s*([A-Za-z]{1,4})\s*\n\s*([A-Za-z]{1,4})\s+"
+        r"([01]+(?:\s+[01]+)+)\s*$", prompt)
+    raw_rows = re.findall(r"(?m)^\s*([01]+)\s*\|\s*([01xXdD| \t-]+)\s*$", prompt)
+    rows = [(label, *[v.strip() for v in cells.strip().strip("|").split("|")])
+            for label, cells in raw_rows]
+    if header and len(outputs) == 1 and outputs[0][0] == 1:
         cols, rowvars = header.group(1), header.group(2)
-        if len(set(cols + rowvars)) == 4 and set(cols + rowvars) == {
-                n for w, n in inputs if w == 1} and len(inputs) == 4:
+        if (len(set(cols + rowvars)) == len(cols + rowvars)
+                and set(cols + rowvars) == {n for w, n in inputs if w == 1}
+                and len(inputs) == len(cols + rowvars)):
             columns = header.group(3).split()
-            if len(set(columns)) == 4 and len({row[0] for row in rows}) == 4:
+            if (len(columns) == len(set(columns)) == 1 << len(cols)
+                    and all(len(c) == len(cols) for c in columns)
+                    and len(rows) == len({row[0] for row in rows}) == 1 << len(rowvars)
+                    and all(len(row[0]) == len(rowvars)
+                            and len(row[1:]) == len(columns)
+                            and all(v in "01xXdD-" and len(v) == 1 for v in row[1:])
+                            for row in rows)):
                 statements = []
+                facts = []
                 for row in rows:
                     for col, value in zip(columns, row[1:]):
                         if value not in ("0", "1"):
                             continue
                         values = dict(zip(cols + rowvars, col + row[0]))
+                        facts.append(dict(inputs={n: int(v) for n, v in values.items()},
+                                          outputs={outputs[0][1]: int(value)}))
                         statements.append("; ".join(f"{n}=1'b{values[n]}" for _, n in inputs)
                                           + "; #1; " + _check(outputs[0][1], int(value), 1,
                                                               f"K-map col={col} row={row[0]}"))
                 if statements:
-                    return SelfTest("", "\n".join(statements), "All specified K-map cells")
+                    return SelfTest("", "\n".join(statements), "All specified K-map cells",
+                                    facts=facts)
     # A waveform table supplies expected values directly, without circuit inference.
     if all(w == 1 for _, w, _ in ports):
         for line in prompt.splitlines():
@@ -74,6 +85,37 @@ def from_spec(prompt: str, contract: Contract) -> SelfTest | None:
                 return SelfTest("", "\n".join(body),
                                 "Every defined output in the supplied waveform")
     return _state_table(prompt, contract) or _moore_arrows(prompt, contract)
+
+
+def literal_implementation(test: SelfTest | None, contract: Contract) -> str | None:
+    """Compile complete literal observations, without minimizing or guessing."""
+    if test is None or not test.facts:
+        return None
+    inputs = [(w, n) for d, w, n in contract.ports if d == "input"]
+    outputs = [(w, n) for d, w, n in contract.ports if d == "output"]
+    if not inputs or not outputs or any(w != 1 for w, _ in inputs + outputs):
+        return None
+    observations = {}
+    for fact in test.facts:
+        if (set(fact["inputs"]) != {n for _, n in inputs}
+                or set(fact["outputs"]) != {n for _, n in outputs}):
+            return None
+        key = "".join(str(fact["inputs"][n]) for _, n in inputs)
+        value = "".join(str(fact["outputs"][n]) for _, n in outputs)
+        if (any(v not in "01" for v in key + value)
+                or key in observations and observations[key] != value):
+            return None
+        observations[key] = value
+    declarations = [f"  {d}{' reg' if d == 'output' else ''} {n}"
+                    for d, _, n in contract.ports]
+    lhs = "{" + ",".join(n for _, n in outputs) + "}"
+    selector = "{" + ",".join(n for _, n in inputs) + "}"
+    rows = [f"    {len(inputs)}'b{k}: {lhs}={len(outputs)}'b{v};"
+            for k, v in sorted(observations.items())]
+    return (f"module {contract.top}(\n" + ",\n".join(declarations)
+            + ");\nalways @* begin\n  case(" + selector + ")\n"
+            + "\n".join(rows) + f"\n    default: {lhs}='0;\n"
+            "  endcase\nend\nendmodule\n")
 
 
 def _state_table(prompt: str, contract: Contract) -> SelfTest | None:

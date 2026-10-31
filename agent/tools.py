@@ -151,9 +151,9 @@ class RtlToolchain:
                     return 2, summarize_log(log)
                 if index == 2:
                     if "AGENT_CHECKER_ERROR" in out:
-                        return 2, summarize_log(log)
+                        return 2, summarize_log(log, 8000)
                     if "AGENT_MISMATCH" in out:
-                        return 1, summarize_log(log)
+                        return 1, summarize_log(log, 8000)
                     passed = re.search(r"AGENT_SELFTEST_PASS checks=([1-9]\d*)", out)
                     if rc == 0 and passed:
                         return 0, summarize_log(log)
@@ -369,13 +369,27 @@ def source_safety_warnings(source: str,
                            ports: list[tuple[str, int, str]]) -> list[str]:
     """Catch deterministic RTL hazards before spending a Vivado invocation.
 
-    This is intentionally narrow. It only diagnoses literal indices on ports
-    whose widths are known from the contract and `genvar` used in a procedural
-    loop. The compiler remains authoritative for all other syntax and semantics.
+    This is intentionally narrow: known port bounds, procedural genvars,
+    malformed literals and direct unsigned comparisons with negative constants.
+    The compiler remains authoritative for all other syntax and semantics.
     """
     text = strip_comments(source)
     widths = {name: width for _, width, name in ports if width > 0}
     warnings: list[str] = []
+    if re.search(r"\b\d+\s*'[sS][dD]\s*-\s*\d+\b", text):
+        warnings.append("invalid signed literal: put unary minus before the "
+                        "sized literal, not after its decimal base")
+    # A signed RHS assignment does not make an unsigned temporary signed.
+    for declaration in re.finditer(
+            r"\b(?:reg|wire|logic)\s+(?!signed\b)(?:unsigned\s+)?"
+            r"\[[^\]\n]+\]\s+([A-Za-z_]\w*)\s*(?=[;,)])", text):
+        name = declaration.group(1)
+        if re.search(rf"\b{re.escape(name)}\s*[<>](?![=<>])\s*-\s*"
+                     r"(?:\d+\s*'[sS]?[dD]\s*)?\d+", text):
+            warnings.append(
+                f"unsigned vector '{name}' is compared directly with a negative "
+                "literal; Verilog makes the comparison unsigned. Preserve "
+                "specified signed interpretation through the temporary and comparison")
     for name, width in widths.items():
         scalar = re.compile(rf"\b{re.escape(name)}\s*\[\s*(\d+)\s*\]")
         for match in scalar.finditer(text):
@@ -596,7 +610,9 @@ def summarize_log(log: str, budget: int = 2000) -> str:
     interesting = [ln for ln in lines if any(k in ln for k in _INTERESTING)]
     keep = []
     seen = set()
-    for line in failures + critical + verdicts + interesting:
+    measurements = [ln for ln in lines if "AGENT_SELFTEST_RESULT" in ln]
+    history = [ln for ln in lines if ln.startswith("AGENT_INPUT ")]
+    for line in measurements + failures + critical + history + verdicts + interesting:
         if line and line not in seen:
             keep.append(line)
             seen.add(line)
