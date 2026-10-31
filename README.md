@@ -20,11 +20,11 @@
 - [设计报告](REPORT.md)：架构、模型、技能、验证与失败分析。
 - [模型配置](model/MODEL.md)：来源、revision、权重校验和与推理参数。
 - [接口契约](docs/API_CONTRACT.md)：赛事接口参考；其中模型示例不是本方案配置。
-- [时间预算](docs/DEADLINE_FALLBACK.md)：时限、候选保留及子进程回收。
-- [自检与路由修复](docs/VERIFICATION_ROUTING_20261031.md)：独立预算、复核恢复和技能边界。
-- [清理与验证](docs/REMOVAL_AUDIT_20261030.md)：预置算法删除范围及验证状态。
-- [历史开发验证](docs/VALIDATION_20261030.md)：带版本的历史记录。
-- [开源来源](docs/OPEN_SOURCE_PATTERNS.md)：实现借鉴与适用边界。
+- [常见问题](docs/FAQ.md)：参赛环境、判定、模型与评测规则。
+- [提交说明](docs/SUBMISSION.md)：仓库提交、封存与复现要求。
+
+开发验证记录、实现来源及已知问题保留在
+[历史文档](https://github.com/wys-up/40070_rtlagent/tree/40590a5e903a5a4590ab2f2ea651011830bd0223/docs)。
 
 当前程序化自检仅转换本次题面显式给出的表格和波形；其它规格由模型生成检查器后独立复核。
 旧版题目成绩与当前全量评测分别记录，不合并计算通过率。

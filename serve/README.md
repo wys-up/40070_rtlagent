@@ -59,6 +59,6 @@ curl --fail -X POST -H "Authorization: Bearer $FPGACHINA_TOKEN" \
 - 常驻进程由 `start.sh` 独立启动；`run.sh` 仅处理单题。单题进程组终止不应结束模型。
 - 临时 EDA 目录使用本地盘；完成后清理，避免在网络存储中保留 Vivado 中间文件。
 - 900 秒包含排队和取回结果；工作预算与进程回收见
-  [时限说明](../docs/DEADLINE_FALLBACK.md)。
+  [时限说明](https://github.com/wys-up/40070_rtlagent/blob/40590a5e903a5a4590ab2f2ea651011830bd0223/docs/DEADLINE_FALLBACK.md)。
 - 接口任务表保存在内存。服务重启会丢失已有 job，守护脚本重启不能恢复在途评分任务。
 - Docker 构建方式与单题入口见[设计报告](../REPORT.md)。

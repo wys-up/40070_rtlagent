@@ -55,7 +55,7 @@ prompt/interface → 规格提取 → 技能路由 → 本地模型 → RTL 候�
 最多五轮，按剩余预算收紧请求和工具超时。候选去重、重复错误指纹及从原规格重新生成
 用于限制局部修补循环。接口、明确语义、编译、综合和功能证据逐级排序，更优候选立即
 原子落盘；较差候选不覆盖已有结果。预算与进程回收见
-[时限说明](docs/DEADLINE_FALLBACK.md)。
+[时限说明](https://github.com/wys-up/40070_rtlagent/blob/40590a5e903a5a4590ab2f2ea651011830bd0223/docs/DEADLINE_FALLBACK.md)。
 
 ### 4.3 上下文管理
 
@@ -112,7 +112,7 @@ checker 生成/复核输出分别最多 2048/512 token。
 Windows 单元测试 78 项，68 项通过、10 项因 Linux/Vivado 环境跳过。
 最终运行源码 `422b7e9` 的 Linux/Vivado 测试 83 项全部通过、无跳过，
 测试耗时 87.886 秒。七条技能均通过格式验证。
-源码与日志校验和见[验证数据](docs/submission_validation_20261030.json)。
+源码与日志校验和见[验证数据](https://github.com/wys-up/40070_rtlagent/blob/40590a5e903a5a4590ab2f2ea651011830bd0223/docs/submission_validation_20261030.json)。
 
 该固定快照的 163 题全量评测已启动，逐题串行生成并独立判题。
 全量判级、L3 通过率、基线对比与总墙钟尚未完成；不填入历史版本成绩。
@@ -122,7 +122,7 @@ Windows 单元测试 78 项，68 项通过、10 项因 Linux/Vivado 环境跳过
 
 agent 墙钟包含模型、EDA、自检及修复；外部 judge 单独计时。
 开发入口直接调用 `run.sh`，不包含 HTTP 排队与外部查询传输。
-历史样本与源码、结果哈希见[历史验证记录](docs/VALIDATION_20261030.md)，
+历史样本与源码、结果哈希见[历史验证记录](https://github.com/wys-up/40070_rtlagent/blob/40590a5e903a5a4590ab2f2ea651011830bd0223/docs/VALIDATION_20261030.md)，
 不并入最终快照统计。
 
 ## 7. 复现说明
@@ -202,7 +202,7 @@ python3 tests/regression_agent.py \
 - [赛事接口契约](docs/API_CONTRACT.md)。
 - [Qwen2.5-Coder GGUF 权重](https://huggingface.co/Qwen/Qwen2.5-Coder-32B-Instruct-GGUF)，revision 与校验和见模型声明。
 - NVIDIA VerilogEval v2，开发题集固定来源提交 `c498220d0a52248f8e3fdffe279075215bde2da6`。
-- [Pi](https://github.com/earendil-works/pi)、[OpenCode](https://github.com/anomalyco/opencode)、[Hermes](https://github.com/NousResearch/hermes-agent)：精确 revision 和借鉴范围见[来源记录](docs/OPEN_SOURCE_PATTERNS.md)。
+- [Pi](https://github.com/earendil-works/pi)、[OpenCode](https://github.com/anomalyco/opencode)、[Hermes](https://github.com/NousResearch/hermes-agent)：精确 revision 和借鉴范围见[来源记录](https://github.com/wys-up/40070_rtlagent/blob/40590a5e903a5a4590ab2f2ea651011830bd0223/docs/OPEN_SOURCE_PATTERNS.md)。
 
 ## 12. 大模型协作记录
 
@@ -217,7 +217,7 @@ python3 tests/regression_agent.py \
 ## 13. 附录
 
 - 控制流：`agent/main.py`；自检协议：`agent/verification.py`；工具链：`agent/tools.py`。
-- 当前清理范围、测试与源码版本：[REMOVAL_AUDIT_20261030.md](docs/REMOVAL_AUDIT_20261030.md)。
-- 历史逐题判级与来源哈希：[VALIDATION_20261030.md](docs/VALIDATION_20261030.md) 和
-  [validation_20261030.json](docs/validation_20261030.json)。
+- 当前清理范围、测试与源码版本：[REMOVAL_AUDIT_20261030.md](https://github.com/wys-up/40070_rtlagent/blob/40590a5e903a5a4590ab2f2ea651011830bd0223/docs/REMOVAL_AUDIT_20261030.md)。
+- 历史逐题判级与来源哈希：[VALIDATION_20261030.md](https://github.com/wys-up/40070_rtlagent/blob/40590a5e903a5a4590ab2f2ea651011830bd0223/docs/VALIDATION_20261030.md) 和
+  [validation_20261030.json](https://github.com/wys-up/40070_rtlagent/blob/40590a5e903a5a4590ab2f2ea651011830bd0223/docs/validation_20261030.json)。
 - 完整模型回复、候选与工具日志保存在评测输出目录，运行产物不提交 Git。
